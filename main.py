@@ -11,7 +11,16 @@ Read-only web UI over two directory trees:
 This app never writes into either tree. It does keep a small ephemeral cache
 (CACHE_DIR, defaults to a tmpfs path) of today's segments stitched into one
 playable file, rebuilt on demand so "today" scrubs like any other day.
+
+Camera reconnects mean a segment's actual recorded duration can be shorter
+than the wall-clock gap to the next segment's start -- if we just assumed
+`wall_clock = day_start + video_position`, that drift compounds over the day
+and the scrub bar/clock end up visibly offset from the real time. Instead we
+track, per segment, where it lands in the concatenated video (`cum`) and where
+it lands on the wall clock (`wall`), and hand that breakpoint table to the
+frontend so it can map one to the other exactly.
 """
+import json
 import os
 import re
 import subprocess
@@ -65,6 +74,19 @@ def _hhmmss_to_seconds(hhmmss):
     return int(hhmmss[0:2]) * 3600 + int(hhmmss[2:4]) * 60 + int(hhmmss[4:6])
 
 
+def _probe_duration(path):
+    """Seconds of media in `path`, or 0.0 if ffprobe can't tell (corrupt stub)."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=15,
+        )
+        return max(0.0, float(r.stdout.strip()))
+    except Exception:
+        return 0.0
+
+
 def _today_segments(cam, date):
     """(time, path, size) for date's real (non-stub) segments, oldest first."""
     camdir = os.path.join(RECORD_DIR, cam)
@@ -88,7 +110,12 @@ def _today_segments(cam, date):
 
 def _build_today_cache(cam, date):
     """Stitch today's segments into one file under CACHE_DIR, rebuilding it
-    if stale. Returns (path, start_seconds) or None if nothing recorded yet.
+    (and its breakpoint map) if stale. Returns (path, breaks) or None if
+    nothing has been recorded yet. `breaks` is a list of
+    {cum, wall, dur} triples: `cum` seconds into the concatenated video maps
+    to wall-clock second-of-day `wall`, for the next `dur` seconds -- built
+    from each segment's *actual* probed duration, so gaps from reconnects
+    don't drift the mapping.
     """
     segs = _today_segments(cam, date)
     if not segs:
@@ -96,12 +123,13 @@ def _build_today_cache(cam, date):
 
     key = f"{cam}-{date}"
     cache_path = os.path.join(CACHE_DIR, f"{key}.mp4")
-    start_seconds = _hhmmss_to_seconds(segs[0][0])
+    map_path = os.path.join(CACHE_DIR, f"{key}.json")
 
     with _locks[key]:
         newest_seg_mtime = max(os.path.getmtime(p) for _, p, _ in segs)
         stale = (
             not os.path.isfile(cache_path)
+            or not os.path.isfile(map_path)
             or os.path.getmtime(cache_path) < newest_seg_mtime
             or (time.time() - os.path.getmtime(cache_path)) > TODAY_CACHE_MAX_AGE
         )
@@ -114,15 +142,31 @@ def _build_today_cache(cam, date):
             cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
                    "-f", "concat", "-safe", "0", "-i", listfile,
                    "-c", "copy", "-movflags", "+faststart",
-                   "-f", "mp4", tmp_out]  # -f mp4: tmp_out's ".tmp" suffix defeats ext-sniffing
+                   "-f", "mp4", tmp_out]  # -f mp4: the ".tmp" suffix defeats ext-sniffing
             rc = subprocess.run(cmd).returncode
             os.remove(listfile)
             if rc == 0:
+                breaks = []
+                cum = 0.0
+                for t, p, _ in segs:
+                    dur = _probe_duration(p)
+                    breaks.append({"cum": round(cum, 2),
+                                  "wall": _hhmmss_to_seconds(t),
+                                  "dur": round(dur, 2)})
+                    cum += dur
+                with open(map_path + ".tmp", "w") as fh:
+                    json.dump(breaks, fh)
+                os.replace(map_path + ".tmp", map_path)
                 os.replace(tmp_out, cache_path)  # atomic: safe for in-flight reads
             elif not os.path.isfile(cache_path):
                 return None
 
-    return cache_path, start_seconds
+    try:
+        with open(map_path) as fh:
+            breaks = json.load(fh)
+    except (OSError, ValueError):
+        breaks = []
+    return cache_path, breaks
 
 
 @app.get("/api/cameras")
@@ -138,9 +182,10 @@ def config():
 @app.get("/api/cameras/{cam}/days")
 def days(cam: str):
     """One entry per day: past consolidated files plus today (stitched live
-    from segments), newest first. `start_seconds` is the wall-clock second of
-    the day the video starts at -- 0 for a full consolidated day, later for
-    today (whenever the first segment happened to start).
+    from segments), newest first. `breaks` maps video position to wall-clock
+    time-of-day (see _build_today_cache); a `dur` of null means "runs to the
+    end of the file" -- used for the single-breakpoint fallback on past days,
+    which aidot-webrtc doesn't (yet) annotate with real gap data.
     """
     _safe_cam(cam)
     out = []
@@ -156,20 +201,22 @@ def days(cam: str):
                 "date": m.group(1),
                 "size": os.path.getsize(p),
                 "url": f"/media/daily/{cam}/{f}",
-                "start_seconds": 0,
                 "live": False,
+                "breaks": [{"cum": 0, "wall": 0, "dur": None}],
             })
 
     today = datetime.now(TZ).strftime("%Y%m%d")
     if not any(d["date"] == today for d in out):
-        segs = _today_segments(cam, today)
-        if segs:
+        built = _build_today_cache(cam, today)
+        if built:
+            _path, breaks = built
+            segs = _today_segments(cam, today)  # cheap: listdir + stat, no ffprobe
             out.append({
                 "date": today,
                 "size": sum(sz for _, _, sz in segs),
                 "url": f"/media/today/{cam}/{today}.mp4",
-                "start_seconds": _hhmmss_to_seconds(segs[0][0]),
                 "live": True,
+                "breaks": breaks,
             })
 
     out.sort(key=lambda x: x["date"], reverse=True)
@@ -242,7 +289,7 @@ def media_today(cam: str, date: str, request: Request):
     built = _build_today_cache(cam, date)
     if not built:
         raise HTTPException(404, "no segments recorded yet for that date")
-    path, _start_seconds = built
+    path, _breaks = built
     return _serve_video(path, request)
 
 
