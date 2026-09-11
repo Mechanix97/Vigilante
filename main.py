@@ -108,6 +108,49 @@ def _today_segments(cam, date):
     return out
 
 
+def _concat_copy(paths, out_path):
+    """Fast path: stream-copy concat via the concat demuxer -- cheap
+    regardless of how much footage is involved, since nothing is decoded.
+
+    Known failure mode: if aidot-webrtc's recorder process was restarted
+    mid-day (a redeploy, a host reboot), the segments before and after that
+    restart can carry slightly different H.264 parameter sets. The concat
+    demuxer's automatic bitstream filter then corrupts at that boundary and
+    ffmpeg silently stops there -- exit code 0, but the file only has the
+    first stretch. Caller must verify the duration; see _build_today_cache.
+    """
+    listfile = out_path + ".txt"
+    with open(listfile, "w") as fh:
+        for p in paths:
+            fh.write(f"file '{p}'\n")
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
+           "-f", "concat", "-safe", "0", "-i", listfile,
+           "-c", "copy", "-movflags", "+faststart",
+           "-f", "mp4", out_path]  # -f mp4: the ".tmp" suffix defeats ext-sniffing
+    rc = subprocess.run(cmd).returncode
+    os.remove(listfile)
+    return rc == 0 and os.path.isfile(out_path)
+
+
+def _concat_reencode(paths, out_path):
+    """Slow path: decode every segment and re-encode through the concat
+    *filter* instead of the concat demuxer. Each input is decoded on its own,
+    so a parameter-set mismatch between segments can't corrupt the join --
+    used only when _concat_copy's output comes up short.
+    """
+    args = []
+    for p in paths:
+        args += ["-i", p]
+    n = len(paths)
+    filt = "".join(f"[{i}:v]" for i in range(n)) + f"concat=n={n}:v=1:a=0[v]"
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args,
+           "-filter_complex", filt, "-map", "[v]",
+           "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+           "-movflags", "+faststart", "-f", "mp4", out_path]
+    rc = subprocess.run(cmd).returncode
+    return rc == 0 and os.path.isfile(out_path)
+
+
 def _build_today_cache(cam, date):
     """Stitch today's segments into one file under CACHE_DIR, rebuilding it
     (and its breakpoint map) if stale. Returns (path, breaks) or None if
@@ -134,18 +177,21 @@ def _build_today_cache(cam, date):
             or (time.time() - os.path.getmtime(cache_path)) > TODAY_CACHE_MAX_AGE
         )
         if stale:
-            listfile = os.path.join(CACHE_DIR, f"{key}.txt")
-            with open(listfile, "w") as fh:
-                for _, p, _ in segs:
-                    fh.write(f"file '{p}'\n")
+            paths = [p for _, p, _ in segs]
             tmp_out = cache_path + ".tmp"
-            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
-                   "-f", "concat", "-safe", "0", "-i", listfile,
-                   "-c", "copy", "-movflags", "+faststart",
-                   "-f", "mp4", tmp_out]  # -f mp4: the ".tmp" suffix defeats ext-sniffing
-            rc = subprocess.run(cmd).returncode
-            os.remove(listfile)
-            if rc == 0:
+
+            ok = _concat_copy(paths, tmp_out)
+            if ok:
+                expected = sum(_probe_duration(p) for p in paths)
+                actual = _probe_duration(tmp_out)
+                if actual < expected - 5:  # silent truncation, see _concat_copy
+                    print(f"[{key}] concat copy truncated ({actual:.0f}s of "
+                         f"{expected:.0f}s expected) -- falling back to re-encode")
+                    ok = False
+            if not ok:
+                ok = _concat_reencode(paths, tmp_out)
+
+            if ok:
                 breaks = []
                 cum = 0.0
                 for t, p, _ in segs:

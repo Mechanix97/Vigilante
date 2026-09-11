@@ -123,15 +123,23 @@
   .live-btn:hover { border-color: var(--accent); color: var(--text); }
   .live-btn.active:hover { border-color: var(--live); color: var(--live); }
 
+  .transport { display: flex; align-items: center; gap: 4px; }
+  .transport button {
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; width: 36px; height: 32px; cursor: pointer; font: inherit; font-size: 15px;
+    display: flex; align-items: center; justify-content: center; transition: all .15s;
+  }
+  .transport button:hover:not(:disabled) { border-color: var(--accent); }
+  .transport button:disabled { opacity: .35; cursor: default; }
+
   .scrub-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
-  #day-select, .scrub-jump input[type="time"] {
+  #day-select, #speed-select {
     background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
     border-radius: 8px; padding: 7px 10px; font: inherit; font-weight: 600; font-size: 13px;
     color-scheme: dark; cursor: pointer;
   }
+  #day-select:disabled, #speed-select:disabled { opacity: .35; cursor: default; }
   #day-select { text-transform: capitalize; }
-  .scrub-jump { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
-  .scrub-jump input[type="time"] { cursor: text; }
 
   input[type="range"].timeline {
     -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
@@ -170,9 +178,20 @@
   <div class="scrub">
     <div class="scrub-top">
       <button class="live-btn active" id="live-btn"><span class="dot"></span><span id="live-btn-label">EN VIVO</span></button>
+      <div class="transport">
+        <button id="back10-btn" title="Retroceder 10s" disabled>⏪</button>
+        <button id="play-btn" title="Pausar/Reproducir" disabled>⏸</button>
+        <button id="fwd10-btn" title="Avanzar 10s" disabled>⏩</button>
+      </div>
       <div class="scrub-controls">
+        <select id="speed-select" disabled>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
         <select id="day-select"></select>
-        <div class="scrub-jump">ir a <input type="time" step="1" id="jump-input"></div>
       </div>
     </div>
     <input type="range" class="timeline" id="timeline" min="0" max="0" value="0" step="0.1">
@@ -184,8 +203,9 @@
 const $ = (s) => document.querySelector(s);
 const viewport = $("#viewport");
 const timeline = $("#timeline"), clock = $("#clock");
-const jumpInput = $("#jump-input"), daySelect = $("#day-select");
+const daySelect = $("#day-select"), speedSelect = $("#speed-select");
 const liveBtn = $("#live-btn"), liveBtnLabel = $("#live-btn-label");
+const playBtn = $("#play-btn"), back10Btn = $("#back10-btn"), fwd10Btn = $("#fwd10-btn");
 let cameras = [], mediamtxUrl = "", currentCam = null;
 let allDays = [], activeDay = null, atLiveEdge = false;
 let video = null, dragging = false, liveClockTimer = null;
@@ -216,24 +236,6 @@ function videoToWall(breaks, v) {
   const last = breaks[breaks.length - 1];
   return last ? last.wall + (last.dur ?? 0) : 0;
 }
-function wallToVideo(breaks, w) {
-  for (const b of breaks) {
-    const d = b.dur == null ? Infinity : b.dur;
-    if (w >= b.wall && w < b.wall + d) return b.cum + (w - b.wall);
-  }
-  // requested time falls in a gap (or outside the recording): snap to the
-  // nearest segment edge instead of leaving the player stuck
-  let best = 0, bestDist = Infinity;
-  for (const b of breaks) {
-    const d = b.dur == null ? 0 : b.dur;
-    for (const [vv, ww] of [[b.cum, b.wall], [b.cum + d, b.wall + d]]) {
-      const dist = Math.abs(w - ww);
-      if (dist < bestDist) { bestDist = dist; best = vv; }
-    }
-  }
-  return best;
-}
-
 // ---------------- tabs ----------------
 function buildTabs() {
   const tabs = $("#tabs");
@@ -318,6 +320,25 @@ daySelect.addEventListener("change", () => {
   if (day.live) enterLiveEdge(day); else enterPlayback(day, 0);
 });
 
+// ---------------- transport (pause, ±10s, speed) ----------------
+function setTransportEnabled(enabled) {
+  playBtn.disabled = back10Btn.disabled = fwd10Btn.disabled = speedSelect.disabled = !enabled;
+}
+function updatePlayIcon() {
+  playBtn.textContent = video && !video.paused ? "⏸" : "▶";
+}
+playBtn.onclick = () => {
+  if (!video) return;
+  if (video.paused) video.play(); else video.pause();
+};
+back10Btn.onclick = () => { if (video) video.currentTime = Math.max(0, video.currentTime - 10); };
+fwd10Btn.onclick = () => {
+  if (video) video.currentTime = Math.min(video.duration || Infinity, video.currentTime + 10);
+};
+speedSelect.addEventListener("change", () => {
+  if (video) video.playbackRate = Number(speedSelect.value);
+});
+
 // ---------------- live edge (real mediamtx stream) ----------------
 function enterLiveEdge(day) {
   activeDay = day;
@@ -326,6 +347,7 @@ function enterLiveEdge(day) {
   liveBtn.classList.add("active");
   liveBtnLabel.textContent = "EN VIVO";
   daySelect.value = day.date;
+  setTransportEnabled(false);
   stopLiveClock();
 
   viewport.innerHTML = mediamtxUrl
@@ -346,6 +368,7 @@ function enterPlayback(day, atSeconds) {
   liveBtn.classList.remove("active");
   liveBtnLabel.textContent = "VOLVER A VIVO";
   daySelect.value = day.date;
+  setTransportEnabled(true);
 
   const dur = totalDuration(day);
   timeline.max = dur;
@@ -355,9 +378,10 @@ function enterPlayback(day, atSeconds) {
   if (!alreadyPlaying) {
     viewport.innerHTML = "";
     video = document.createElement("video");
-    video.controls = true;
+    video.controls = false;
     video.playsInline = true;
     video.autoplay = true;
+    video.playbackRate = Number(speedSelect.value);
     video.dataset.day = day.date;
     video.src = day.url;
     viewport.appendChild(video);
@@ -366,17 +390,15 @@ function enterPlayback(day, atSeconds) {
     });
     video.addEventListener("timeupdate", () => {
       if (!dragging) timeline.value = video.currentTime;
-      const wall = videoToWall(activeDay.breaks, video.currentTime);
-      clock.textContent = fmtHMS(wall);
-      jumpInput.value = fmtHMS(wall);
+      clock.textContent = fmtHMS(videoToWall(activeDay.breaks, video.currentTime));
     });
+    video.addEventListener("play", updatePlayIcon);
+    video.addEventListener("pause", updatePlayIcon);
   } else {
     video.currentTime = Math.min(atSeconds, video.duration || dur);
   }
-
-  const wall0 = videoToWall(day.breaks, atSeconds);
-  clock.textContent = fmtHMS(wall0);
-  jumpInput.value = fmtHMS(wall0);
+  updatePlayIcon();
+  clock.textContent = fmtHMS(videoToWall(day.breaks, atSeconds));
 }
 
 liveBtn.onclick = () => {
@@ -404,13 +426,6 @@ timeline.addEventListener("change", () => {
   }
   dragging = false;
 });
-jumpInput.addEventListener("change", () => {
-  if (!activeDay) return;
-  const [h, m, s] = jumpInput.value.split(":").map(Number);
-  const target = wallToVideo(activeDay.breaks, h * 3600 + m * 60 + (s || 0));
-  if (atLiveEdge) enterPlayback(activeDay, target);
-  else if (video) video.currentTime = target;
-});
 
 // ---------------- per-camera bootstrap ----------------
 async function refreshDays() {
@@ -435,6 +450,7 @@ async function showCamera(cam) {
     viewport.innerHTML = '<div class="empty">Sin grabaciones todavía para esta cámara</div>';
     timeline.max = 0; timeline.value = 0;
     clock.textContent = "--:--:--";
+    setTransportEnabled(false);
   }
 }
 
