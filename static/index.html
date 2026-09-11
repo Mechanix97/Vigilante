@@ -20,10 +20,14 @@
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   }
   header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .06em; }
-  header button {
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tabs button {
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit;
+    text-transform: capitalize;
   }
+  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tabs button[data-tab="dashboard"] { text-transform: none; letter-spacing: .04em; }
   .live-dot {
     display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     background: var(--live); margin-right: 6px; vertical-align: 1px;
@@ -99,7 +103,7 @@
 <body>
 <header>
   <h1>VIGILANTE</h1>
-  <button id="back" hidden>← Todas las cámaras</button>
+  <div class="tabs" id="tabs"></div>
 </header>
 
 <main id="dashboard" class="dashboard"></main>
@@ -144,6 +148,36 @@ function liveSrc(cam) {
   return `${mediamtxUrl}/${cam}/`;
 }
 
+// --- tabs: DASHBOARD + one per camera ---
+function buildTabs() {
+  const tabs = $("#tabs");
+  tabs.innerHTML = "";
+  const mk = (tab, label) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.dataset.tab = tab;
+    b.onclick = () => showTab(tab);
+    tabs.appendChild(b);
+    return b;
+  };
+  mk("dashboard", "DASHBOARD");
+  cameras.forEach((cam) => mk(cam, cam));
+}
+
+function showTab(tab) {
+  document.querySelectorAll(".tabs button").forEach(
+    (b) => b.classList.toggle("active", b.dataset.tab === tab));
+  if (tab === "dashboard") {
+    currentCam = null;
+    $("#single-live").innerHTML = "";
+    $("#single").hidden = true;
+    $("#dashboard").hidden = false;
+    document.title = "VIGILANTE";
+  } else {
+    showCamera(tab);
+  }
+}
+
 // --- dashboard: every camera, live, big ---
 function buildDashboard() {
   const grid = $("#dashboard");
@@ -159,13 +193,13 @@ function buildDashboard() {
     tile.innerHTML = mediamtxUrl
       ? `<iframe src="${liveSrc(cam)}" allow="autoplay"></iframe><span class="label">${cam}</span>`
       : `<span class="label">${cam}</span>`;
-    tile.onclick = () => openCamera(cam);
+    tile.onclick = () => showTab(cam);
     grid.appendChild(tile);
   });
 }
 
 // --- single camera: its own live view + recordings, same screen ---
-function openCamera(cam) {
+function showCamera(cam) {
   currentCam = cam;
   activeBtn = null; activeUrl = null;
   video.removeAttribute("src");
@@ -174,23 +208,12 @@ function openCamera(cam) {
 
   $("#dashboard").hidden = true;
   $("#single").hidden = false;
-  $("#back").hidden = false;
   $("#cam-name").textContent = cam;
   $("#single-live").innerHTML = mediamtxUrl
     ? `<iframe src="${liveSrc(cam)}" allow="autoplay"></iframe>` : "";
   document.title = `VIGILANTE — ${cam}`;
   loadRecordings(cam);
 }
-
-function closeCamera() {
-  currentCam = null;
-  $("#single-live").innerHTML = "";
-  $("#single").hidden = true;
-  $("#dashboard").hidden = false;
-  $("#back").hidden = true;
-  document.title = "VIGILANTE";
-}
-$("#back").onclick = closeCamera;
 
 function play(url, label, btn) {
   if (activeUrl !== url) {
@@ -248,7 +271,9 @@ async function init() {
   ]);
   cameras = cams;
   mediamtxUrl = cfg.mediamtx_url;
+  buildTabs();
   buildDashboard();
+  showTab("dashboard");
 }
 init();
 
