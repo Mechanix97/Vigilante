@@ -51,6 +51,8 @@ CHUNK = 1024 * 1024
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 _locks = defaultdict(threading.Lock)
+_rebuilding = {}  # cam-date -> a background refresh is already running
+_build_secs = {}  # cam-date -> how long its last restitch took
 
 app = FastAPI(title="VIGILANTE")
 
@@ -85,6 +87,54 @@ def _probe_duration(path):
         return max(0.0, float(r.stdout.strip()))
     except Exception:
         return 0.0
+
+
+def _build_breaks(camdir, segnames, durs):
+    """Map positions in a concatenation of `segnames` to wall-clock time.
+
+    Returns [{cum, wall, dur}]: `cum` seconds into the concatenated video
+    correspond to second-of-day `wall`, for `dur` seconds.
+
+    Anchors come from the `.session-*.json` indexes aidot-webrtc's recorder
+    writes -- the epoch at which it fed ffmpeg the first frame of a session,
+    plus that session's ordered segment list. A segment's true start is then
+    `session_start + the duration of everything recorded before it in that
+    session`, all measured rather than inferred.
+
+    The filename stamp is only a fallback: ffmpeg writes it when the muxer
+    opens the file, which lags the first frame by however long the encoder
+    buffered (~12s here), so anchoring to it skews the whole timeline.
+    """
+    starts = {}
+    try:
+        indexes = sorted(f for f in os.listdir(camdir) if f.startswith(".session-"))
+    except OSError:
+        indexes = []
+    for idx in indexes:
+        try:
+            with open(os.path.join(camdir, idx)) as fh:
+                sess = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        offset = 0.0
+        for name in sess.get("segments", []):
+            starts[name] = (sess["start_epoch"] + offset
+                            + sess.get("tz_offset", 0)) % 86400
+            if name not in durs:
+                durs[name] = _probe_duration(os.path.join(camdir, name))
+            offset += durs[name]
+
+    breaks, cum = [], 0.0
+    for name in segnames:
+        wall = starts.get(name)
+        if wall is None:  # pre-index recording: fall back to the filename
+            hhmmss = name[9:15]
+            wall = _hhmmss_to_seconds(hhmmss)
+        d = durs.get(name) or _probe_duration(os.path.join(camdir, name))
+        durs[name] = d
+        breaks.append({"cum": round(cum, 2), "wall": round(wall, 2), "dur": round(d, 2)})
+        cum += d
+    return breaks
 
 
 def _today_segments(cam, date):
@@ -132,6 +182,48 @@ def _concat_copy(paths, out_path):
     return rc == 0 and os.path.isfile(out_path)
 
 
+def _session_fps(camdir, default=10):
+    try:
+        for f in sorted(os.listdir(camdir), reverse=True):
+            if f.startswith(".session-"):
+                with open(os.path.join(camdir, f)) as fh:
+                    return int(json.load(fh).get("fps", default))
+    except (OSError, ValueError):
+        pass
+    return default
+
+
+def _concat_annexb(paths, out_path, fps):
+    """Middle path: strip each segment to an Annex-B elementary stream, glue
+    those together, and re-wrap once.
+
+    The concat demuxer trips over segments whose parameter sets disagree
+    because it tries to bridge containers; taking the container out of the
+    picture first sidesteps that entirely. Still no decoding, so it costs
+    roughly what a file copy costs -- about 11s for an hour and a half of
+    footage here, against minutes for a re-encode of the same.
+    """
+    raw = out_path + ".h264"
+    try:
+        with open(raw, "wb") as out:
+            for p in paths:
+                r = subprocess.run(
+                    ["ffmpeg", "-v", "error", "-i", p, "-map", "0:v:0",
+                     "-c:v", "copy", "-bsf:v", "h264_mp4toannexb",
+                     "-f", "h264", "pipe:1"],
+                    stdout=subprocess.PIPE,
+                )
+                out.write(r.stdout)
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+               "-f", "h264", "-r", str(fps), "-i", raw,
+               "-c:v", "copy", "-movflags", "+faststart", "-f", "mp4", out_path]
+        rc = subprocess.run(cmd).returncode
+        return rc == 0 and os.path.isfile(out_path)
+    finally:
+        if os.path.exists(raw):
+            os.remove(raw)
+
+
 def _concat_reencode(paths, out_path):
     """Slow path: decode every segment and re-encode through the concat
     *filter* instead of the concat demuxer. Each input is decoded on its own,
@@ -151,7 +243,76 @@ def _concat_reencode(paths, out_path):
     return rc == 0 and os.path.isfile(out_path)
 
 
-def _build_today_cache(cam, date):
+def _build_today_cache(cam, date, block=True):
+    """Never make a request wait on restitching.
+
+    The work grows with the day -- and when the fast stream-copy path is
+    unavailable (see _concat_copy) the re-encode fallback takes minutes by
+    evening. So: serve the existing cache immediately and refresh it in the
+    background; if there is no cache yet, start building one and report
+    nothing for now. Callers poll, so it appears as soon as it is ready.
+    """
+    key = f"{cam}-{date}"
+    cache_path = os.path.join(CACHE_DIR, f"{key}.mp4")
+    have_cache = os.path.isfile(cache_path) and os.path.isfile(
+        os.path.join(CACHE_DIR, f"{key}.json"))
+
+    if block:
+        return _rebuild_today_cache(cam, date)
+
+    if not _rebuilding.get(key) and (not have_cache or _is_stale(cam, date)):
+        _rebuilding[key] = True
+
+        def refresh():
+            started = time.time()
+            try:
+                if not have_cache:
+                    print(f"[{key}] building today's cache for the first time; "
+                          "it will appear once ready")
+                _rebuild_today_cache(cam, date)
+            finally:
+                _build_secs[key] = time.time() - started
+                _rebuilding[key] = False
+                print(f"[{key}] restitched in {_build_secs[key]:.0f}s")
+
+        threading.Thread(target=refresh, daemon=True).start()
+
+    return _read_cache(cam, date) if have_cache else None
+
+
+def _read_cache(cam, date):
+    key = f"{cam}-{date}"
+    cache_path = os.path.join(CACHE_DIR, f"{key}.mp4")
+    try:
+        with open(os.path.join(CACHE_DIR, f"{key}.json")) as fh:
+            return cache_path, json.load(fh)
+    except (OSError, ValueError):
+        return cache_path, []
+
+
+def _is_stale(cam, date):
+    """Should the cache be refreshed yet?
+
+    Restitching gets more expensive as the day grows -- by evening it rewrites
+    gigabytes -- so the refresh interval scales with how long the last build
+    actually took (at least TODAY_CACHE_MAX_AGE, at most ~10 minutes). Chasing
+    a 45s freshness target all day would keep the disk busy for no real gain:
+    the live view is what's used for "now", and this file is for looking back.
+    """
+    segs = _today_segments(cam, date)
+    if not segs:
+        return False
+    key = f"{cam}-{date}"
+    cache_path = os.path.join(CACHE_DIR, f"{key}.mp4")
+    try:
+        age = time.time() - os.path.getmtime(cache_path)
+    except OSError:
+        return True
+    interval = min(600, max(TODAY_CACHE_MAX_AGE, _build_secs.get(key, 0) * 3))
+    return age > interval
+
+
+def _rebuild_today_cache(cam, date):
     """Stitch today's segments into one file under CACHE_DIR, rebuilding it
     (and its breakpoint map) if stale. Returns (path, breaks) or None if
     nothing has been recorded yet. `breaks` is a list of
@@ -180,26 +341,29 @@ def _build_today_cache(cam, date):
             paths = [p for _, p, _ in segs]
             tmp_out = cache_path + ".tmp"
 
-            ok = _concat_copy(paths, tmp_out)
-            if ok:
-                expected = sum(_probe_duration(p) for p in paths)
-                actual = _probe_duration(tmp_out)
-                if actual < expected - 5:  # silent truncation, see _concat_copy
-                    print(f"[{key}] concat copy truncated ({actual:.0f}s of "
-                         f"{expected:.0f}s expected) -- falling back to re-encode")
-                    ok = False
+            camdir = os.path.join(RECORD_DIR, cam)
+            expected = sum(_probe_duration(p) for p in paths)
+
+            def produced_enough():
+                # tolerate scattered dropped frames around corrupt packets,
+                # but catch the catastrophic truncation _concat_copy warns of
+                return _probe_duration(tmp_out) >= expected * 0.98
+
+            # cheapest first, each one only tried if the last came up short
+            ok = _concat_copy(paths, tmp_out) and produced_enough()
             if not ok:
+                print(f"[{key}] stream-copy concat came up short of "
+                      f"{expected:.0f}s -- repackaging via Annex-B")
+                ok = (_concat_annexb(paths, tmp_out, _session_fps(camdir))
+                      and produced_enough())
+            if not ok:
+                print(f"[{key}] Annex-B repackage came up short too -- re-encoding")
                 ok = _concat_reencode(paths, tmp_out)
 
             if ok:
-                breaks = []
-                cum = 0.0
-                for t, p, _ in segs:
-                    dur = _probe_duration(p)
-                    breaks.append({"cum": round(cum, 2),
-                                  "wall": _hhmmss_to_seconds(t),
-                                  "dur": round(dur, 2)})
-                    cum += dur
+                breaks = _build_breaks(camdir,
+                                       [os.path.basename(p) for p in paths],
+                                       durs={})
                 with open(map_path + ".tmp", "w") as fh:
                     json.dump(breaks, fh)
                 os.replace(map_path + ".tmp", map_path)
@@ -243,17 +407,28 @@ def days(cam: str):
             if not m:
                 continue
             p = os.path.join(camdir, f)
+            # aidot-webrtc drops a <day>.json timeline next to the mp4 saying
+            # where each of that day's segments landed in the file and what
+            # wall-clock second it started at. Without it all we could do is
+            # assume the video starts at 00:00:00, which is wrong for any day
+            # that didn't record from midnight -- so fall back to that only
+            # for files consolidated before the sidecar existed.
+            try:
+                with open(os.path.join(camdir, m.group(1) + ".json")) as fh:
+                    breaks = json.load(fh)
+            except (OSError, ValueError):
+                breaks = [{"cum": 0, "wall": 0, "dur": None}]
             out.append({
                 "date": m.group(1),
                 "size": os.path.getsize(p),
                 "url": f"/media/daily/{cam}/{f}",
                 "live": False,
-                "breaks": [{"cum": 0, "wall": 0, "dur": None}],
+                "breaks": breaks,
             })
 
     today = datetime.now(TZ).strftime("%Y%m%d")
     if not any(d["date"] == today for d in out):
-        built = _build_today_cache(cam, today)
+        built = _build_today_cache(cam, today, block=False)
         if built:
             _path, breaks = built
             segs = _today_segments(cam, today)  # cheap: listdir + stat, no ffprobe
@@ -332,7 +507,7 @@ def media_today(cam: str, date: str, request: Request):
     _safe_cam(cam)
     if not DATE_RE.match(date):
         raise HTTPException(400, "bad date")
-    built = _build_today_cache(cam, date)
+    built = _build_today_cache(cam, date, block=False)
     if not built:
         raise HTTPException(404, "no segments recorded yet for that date")
     path, _breaks = built

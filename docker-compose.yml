@@ -13,8 +13,12 @@ services:
       # reachable from the *browser*, not just this container -- point it at
       # whatever hostname/IP mediamtx's :8889 is published on (Tailscale/LAN)
       - MEDIAMTX_URL=http://homelab:8889
+      - CACHE_DIR=/cache
     volumes:
       # read-only: this app never writes into aidot-webrtc's output
       - /mnt/hdd/aidot-daily:/daily:ro
       - /mnt/hdd/aidot:/rec:ro
+      # today's stitched file, kept on disk so a redeploy doesn't force a
+      # from-scratch restitch of however much of the day has been recorded
+      - /mnt/hdd/vigilante-cache:/cache
     restart: unless-stopped
