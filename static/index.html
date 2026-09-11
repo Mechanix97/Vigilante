@@ -89,12 +89,7 @@
   .tile .label .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); animation: pulse 2s ease-in-out infinite; }
   .tile:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-  /* ---------- single camera view ---------- */
-  .cam-title {
-    font-size: 20px; font-weight: 800; text-transform: capitalize; letter-spacing: -.01em;
-    margin-bottom: 14px;
-  }
-
+  /* ---------- single camera view: no title, straight to the picture ---------- */
   /* width-driven 16:9 box, centered: aspect-ratio derives the height, so it
      never stretches/distorts regardless of how tall the viewport is */
   .viewport-wrap { display: flex; justify-content: center; }
@@ -109,12 +104,13 @@
     color: var(--faint); font-size: 13px; text-align: center; padding: 0 24px;
   }
 
-  /* ---------- scrub bar: always present, live toggle lives here ---------- */
+  /* ---------- scrub bar: live toggle + day picker + jump, always live ---------- */
   .scrub {
-    margin-top: 14px; background: var(--surface); border: 1px solid var(--border);
+    margin: 14px auto 0; max-width: 1100px;
+    background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 16px 18px;
   }
-  .scrub-top { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+  .scrub-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
   .live-btn {
     display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
     background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
@@ -126,14 +122,17 @@
   .live-btn.active .dot { background: var(--live); animation: pulse 1.6s ease-in-out infinite; }
   .live-btn:hover { border-color: var(--accent); color: var(--text); }
   .live-btn.active:hover { border-color: var(--live); color: var(--live); }
-  .scrub-clock { font-size: 24px; font-weight: 700; letter-spacing: .02em; }
-  .scrub-jump { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; margin-left: auto; }
-  .scrub-jump input[type="time"] {
+
+  .scrub-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  #day-select, .scrub-jump input[type="time"] {
     background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 8px; padding: 6px 10px; font: inherit; font-weight: 600;
-    color-scheme: dark;
+    border-radius: 8px; padding: 7px 10px; font: inherit; font-weight: 600; font-size: 13px;
+    color-scheme: dark; cursor: pointer;
   }
-  .scrub-jump input[type="time"]:disabled { opacity: .4; }
+  #day-select { text-transform: capitalize; }
+  .scrub-jump { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .scrub-jump input[type="time"] { cursor: text; }
+
   input[type="range"].timeline {
     -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
     border-radius: 99px; background: var(--surface-2); cursor: pointer; outline: none;
@@ -144,29 +143,13 @@
     background: var(--accent); border: 3px solid #fff2; cursor: pointer;
     box-shadow: 0 0 0 4px var(--accent-dim);
   }
-  input[type="range"].timeline:disabled::-webkit-slider-thumb { background: var(--faint); box-shadow: none; }
   input[type="range"].timeline::-moz-range-thumb {
     width: 16px; height: 16px; border-radius: 50%; background: var(--accent);
     border: 3px solid #fff2; cursor: pointer; box-shadow: 0 0 0 4px var(--accent-dim);
   }
-  .scrub-ends { display: flex; justify-content: space-between; margin-top: 6px; color: var(--faint); font-size: 12px; }
-
-  /* ---------- day picker ---------- */
-  .days { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
-  .day-pill {
-    background: var(--surface); border: 1px solid var(--border); color: var(--muted);
-    padding: 9px 16px; border-radius: 10px; cursor: pointer; font: inherit;
-    font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px;
-    transition: all .15s;
+  .scrub-clock {
+    margin-top: 12px; text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .03em;
   }
-  .day-pill:hover { border-color: var(--accent); color: var(--text); }
-  .day-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .day-pill.today { border-color: var(--live); color: var(--live); }
-  .day-pill.today.active { background: var(--live); border-color: var(--live); color: #fff; }
-  .day-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; }
-  .day-pill .size { color: var(--faint); font-weight: 500; }
-  .day-pill.active .size { color: #ffffffaa; }
-  .empty-note { color: var(--faint); font-size: 13px; padding: 4px 0; }
 </style>
 </head>
 <body>
@@ -178,8 +161,6 @@
 <main id="dashboard" class="dashboard"></main>
 
 <main id="single" hidden>
-  <div class="cam-title" id="cam-name"></div>
-
   <div class="viewport-wrap">
     <div class="viewport" id="viewport">
       <div class="empty">Cargando…</div>
@@ -189,36 +170,26 @@
   <div class="scrub">
     <div class="scrub-top">
       <button class="live-btn active" id="live-btn"><span class="dot"></span><span id="live-btn-label">EN VIVO</span></button>
-      <div class="scrub-clock mono"><span id="clock">--:--:--</span></div>
-      <div class="scrub-jump">
-        ir a
-        <input type="time" step="1" id="jump-input" disabled>
+      <div class="scrub-controls">
+        <select id="day-select"></select>
+        <div class="scrub-jump">ir a <input type="time" step="1" id="jump-input"></div>
       </div>
     </div>
-    <input type="range" class="timeline" id="timeline" min="0" max="100" value="0" step="0.1" disabled>
-    <div class="scrub-ends mono">
-      <span id="range-start">--:--:--</span>
-      <span id="range-end">--:--:--</span>
-    </div>
+    <input type="range" class="timeline" id="timeline" min="0" max="0" value="0" step="0.1">
+    <div class="scrub-clock mono" id="clock">--:--:--</div>
   </div>
-
-  <div class="days" id="days"></div>
-  <div class="empty-note" id="days-empty" hidden>Sin grabaciones todavía para esta cámara</div>
 </main>
 
 <script>
 const $ = (s) => document.querySelector(s);
 const viewport = $("#viewport");
 const timeline = $("#timeline"), clock = $("#clock");
-const jumpInput = $("#jump-input"), rangeStart = $("#range-start"), rangeEnd = $("#range-end");
+const jumpInput = $("#jump-input"), daySelect = $("#day-select");
 const liveBtn = $("#live-btn"), liveBtnLabel = $("#live-btn-label");
-let cameras = [], mediamtxUrl = "", currentCam = null, activeDay = null;
+let cameras = [], mediamtxUrl = "", currentCam = null;
+let allDays = [], activeDay = null, atLiveEdge = false;
 let video = null, dragging = false, liveClockTimer = null;
 
-function fmtSize(bytes) {
-  const mb = bytes / 1e6;
-  return mb >= 1000 ? (mb / 1000).toFixed(1) + " GB" : mb.toFixed(0) + " MB";
-}
 function fmtDate(yyyymmdd) {
   return `${yyyymmdd.slice(6, 8)}/${yyyymmdd.slice(4, 6)}/${yyyymmdd.slice(0, 4)}`;
 }
@@ -230,6 +201,10 @@ function fmtHMS(totalSeconds) {
   return `${h}:${m}:${sec}`;
 }
 function liveSrc(cam) { return `${mediamtxUrl}/${cam}/`; }
+function totalDuration(day) {
+  const last = day.breaks[day.breaks.length - 1];
+  return last ? last.cum + (last.dur ?? 0) : 0;
+}
 
 // ---------------- video position <-> wall-clock mapping ----------------
 // `breaks` is [{cum, wall, dur}], dur:null meaning "runs to the end".
@@ -308,7 +283,7 @@ function buildDashboard() {
   });
 }
 
-// ---------------- live clock (ticks for real while EN VIVO) ----------------
+// ---------------- live clock (ticks for real while at the live edge) ----------------
 function startLiveClock() {
   stopLiveClock();
   const tick = () => {
@@ -326,90 +301,123 @@ function stopLiveClock() {
   if (liveClockTimer) { clearInterval(liveClockTimer); liveClockTimer = null; }
 }
 
-// ---------------- single camera ----------------
-function goLive() {
-  activeDay = null;
-  document.querySelectorAll(".day-pill").forEach((b) => b.classList.remove("active"));
+// ---------------- day select ----------------
+function buildDaySelect() {
+  daySelect.innerHTML = "";
+  allDays.forEach((d) => {
+    const opt = document.createElement("option");
+    opt.value = d.date;
+    opt.textContent = d.live ? "Hoy" : fmtDate(d.date);
+    daySelect.appendChild(opt);
+  });
+  if (activeDay) daySelect.value = activeDay.date;
+}
+daySelect.addEventListener("change", () => {
+  const day = allDays.find((d) => d.date === daySelect.value);
+  if (!day) return;
+  if (day.live) enterLiveEdge(day); else enterPlayback(day, 0);
+});
+
+// ---------------- live edge (real mediamtx stream) ----------------
+function enterLiveEdge(day) {
+  activeDay = day;
+  atLiveEdge = true;
+  video = null;
   liveBtn.classList.add("active");
   liveBtnLabel.textContent = "EN VIVO";
-
-  timeline.disabled = true; timeline.value = 0;
-  jumpInput.disabled = true; jumpInput.value = "";
-  rangeStart.textContent = "--:--:--"; rangeEnd.textContent = "--:--:--";
-  video = null;
+  daySelect.value = day.date;
+  stopLiveClock();
 
   viewport.innerHTML = mediamtxUrl
     ? `<iframe src="${liveSrc(currentCam)}" allow="autoplay"></iframe>`
     : '<div class="empty">Vista en vivo no configurada</div>';
 
+  const dur = totalDuration(day);
+  timeline.max = dur;
+  timeline.value = dur;
   startLiveClock();
 }
-liveBtn.onclick = goLive;
 
-function selectDay(day, btn) {
+// ---------------- playback (a specific day, or today rewound) ----------------
+function enterPlayback(day, atSeconds) {
   activeDay = day;
-  document.querySelectorAll(".day-pill").forEach((b) => b.classList.remove("active"));
-  if (btn) btn.classList.add("active");
+  atLiveEdge = false;
+  stopLiveClock();
   liveBtn.classList.remove("active");
   liveBtnLabel.textContent = "VOLVER A VIVO";
-  stopLiveClock();
+  daySelect.value = day.date;
 
-  viewport.innerHTML = "";
-  video = document.createElement("video");
-  video.controls = true;
-  video.playsInline = true;
-  video.autoplay = true;
-  video.src = day.url;
-  viewport.appendChild(video);
+  const dur = totalDuration(day);
+  timeline.max = dur;
+  timeline.value = Math.min(atSeconds, dur);
 
-  timeline.disabled = false;
-  jumpInput.disabled = false;
-  const wallStart = videoToWall(day.breaks, 0);
-  clock.textContent = fmtHMS(wallStart);
-  jumpInput.value = fmtHMS(wallStart);
-  rangeStart.textContent = fmtHMS(wallStart);
+  const alreadyPlaying = video && video.dataset.day === day.date;
+  if (!alreadyPlaying) {
+    viewport.innerHTML = "";
+    video = document.createElement("video");
+    video.controls = true;
+    video.playsInline = true;
+    video.autoplay = true;
+    video.dataset.day = day.date;
+    video.src = day.url;
+    viewport.appendChild(video);
+    video.addEventListener("loadedmetadata", () => {
+      video.currentTime = Math.min(atSeconds, video.duration || dur);
+    });
+    video.addEventListener("timeupdate", () => {
+      if (!dragging) timeline.value = video.currentTime;
+      const wall = videoToWall(activeDay.breaks, video.currentTime);
+      clock.textContent = fmtHMS(wall);
+      jumpInput.value = fmtHMS(wall);
+    });
+  } else {
+    video.currentTime = Math.min(atSeconds, video.duration || dur);
+  }
 
-  video.addEventListener("loadedmetadata", () => {
-    timeline.max = video.duration || 0;
-    rangeEnd.textContent = fmtHMS(videoToWall(day.breaks, video.duration || 0));
-  });
-  video.addEventListener("timeupdate", () => {
-    if (!dragging) timeline.value = video.currentTime;
-    const wall = videoToWall(day.breaks, video.currentTime);
-    clock.textContent = fmtHMS(wall);
-    jumpInput.value = fmtHMS(wall);
-  });
+  const wall0 = videoToWall(day.breaks, atSeconds);
+  clock.textContent = fmtHMS(wall0);
+  jumpInput.value = fmtHMS(wall0);
 }
 
+liveBtn.onclick = () => {
+  const today = allDays.find((d) => d.live);
+  if (today) enterLiveEdge(today);
+};
+
+// dragging the slider left while at the live edge drops into playback, right
+// back to the edge snaps back to the real live stream
 timeline.addEventListener("input", () => {
   if (!activeDay) return;
   dragging = true;
-  clock.textContent = fmtHMS(videoToWall(activeDay.breaks, Number(timeline.value)));
+  const v = Number(timeline.value);
+  clock.textContent = fmtHMS(videoToWall(activeDay.breaks, v));
+  if (atLiveEdge && v < timeline.max - 1) {
+    enterPlayback(activeDay, v);
+  }
 });
 timeline.addEventListener("change", () => {
-  if (video) video.currentTime = Number(timeline.value);
+  const v = Number(timeline.value);
+  if (activeDay && activeDay.live && v >= timeline.max - 1) {
+    enterLiveEdge(activeDay);
+  } else if (video) {
+    video.currentTime = v;
+  }
   dragging = false;
 });
 jumpInput.addEventListener("change", () => {
-  if (!video || !activeDay) return;
+  if (!activeDay) return;
   const [h, m, s] = jumpInput.value.split(":").map(Number);
-  const wallSeconds = h * 3600 + m * 60 + (s || 0);
-  video.currentTime = wallToVideo(activeDay.breaks, wallSeconds);
+  const target = wallToVideo(activeDay.breaks, h * 3600 + m * 60 + (s || 0));
+  if (atLiveEdge) enterPlayback(activeDay, target);
+  else if (video) video.currentTime = target;
 });
 
-function buildDayPills(days) {
-  const wrap = $("#days");
-  wrap.innerHTML = "";
-  $("#days-empty").hidden = !!days.length;
-  days.forEach((d) => {
-    const b = document.createElement("button");
-    b.className = "day-pill" + (d.live ? " today" : "");
-    b.innerHTML = d.live
-      ? `<span class="dot"></span>Hoy <span class="size">${fmtSize(d.size)}</span>`
-      : `${fmtDate(d.date)} <span class="size">${fmtSize(d.size)}</span>`;
-    b.onclick = () => selectDay(d, b);
-    wrap.appendChild(b);
-  });
+// ---------------- per-camera bootstrap ----------------
+async function refreshDays() {
+  const { days } = await fetch(`/api/cameras/${currentCam}/days`).then((r) => r.json());
+  allDays = days;
+  buildDaySelect();
+  return days;
 }
 
 async function showCamera(cam) {
@@ -417,11 +425,17 @@ async function showCamera(cam) {
   document.title = `VIGILANTE — ${cam}`;
   $("#dashboard").hidden = true;
   $("#single").hidden = false;
-  $("#cam-name").textContent = cam;
-  goLive();
 
-  const { days } = await fetch(`/api/cameras/${cam}/days`).then((r) => r.json());
-  buildDayPills(days);
+  const days = await refreshDays();
+  const today = days.find((d) => d.live);
+  if (today) enterLiveEdge(today);
+  else if (days.length) enterPlayback(days[0], 0);
+  else {
+    activeDay = null; atLiveEdge = false; video = null;
+    viewport.innerHTML = '<div class="empty">Sin grabaciones todavía para esta cámara</div>';
+    timeline.max = 0; timeline.value = 0;
+    clock.textContent = "--:--:--";
+  }
 }
 
 async function init() {
@@ -437,21 +451,20 @@ async function init() {
 }
 init();
 
-// keep the day list fresh (new segments / a rolled-over "today") without
-// touching whatever is currently loaded in the player
-setInterval(() => {
+// keep today's data fresh so the live edge keeps extending, without
+// disturbing whatever is currently on screen
+setInterval(async () => {
   if (!currentCam) return;
-  fetch(`/api/cameras/${currentCam}/days`).then((r) => r.json()).then(({ days }) => {
-    buildDayPills(days);
-    if (activeDay) {
-      const match = days.find((d) => d.date === activeDay.date);
-      if (match) {
-        activeDay = match; // refresh breaks/size for the day being watched
-        const btn = [...document.querySelectorAll(".day-pill")][days.indexOf(match)];
-        if (btn) btn.classList.add("active");
-      }
-    }
-  });
+  const days = await refreshDays();
+  const today = days.find((d) => d.live);
+  if (today && atLiveEdge) {
+    activeDay = today;
+    timeline.max = totalDuration(today);
+    timeline.value = timeline.max;
+  } else if (activeDay) {
+    const match = days.find((d) => d.date === activeDay.date);
+    if (match) activeDay = match;
+  }
 }, 45000);
 </script>
 </body>
