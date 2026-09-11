@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""aidot-viewer -- browse recordings produced by aidot-webrtc.
+"""VIGILANTE -- browse and watch recordings produced by aidot-webrtc.
 
 Read-only web UI over two directory trees:
 
   DAILY_DIR/<camera>/<YYYYMMDD>.mp4   one consolidated file per camera per day
   RECORD_DIR/<camera>/<ts>.mp4        today's rolling 10-min segments, not yet
-                                       consolidated (the newest one may still
-                                       be growing -- it streams fine, it's
-                                       fragmented mp4)
+                                       consolidated by aidot-webrtc's nightly
+                                       job
 
-This app does not write to either tree; aidot-webrtc owns that.
+This app never writes into either tree. It does keep a small ephemeral cache
+(CACHE_DIR, defaults to a tmpfs path) of today's segments stitched into one
+playable file, rebuilt on demand so "today" scrubs like any other day.
 """
 import os
 import re
+import subprocess
+import threading
+import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Request
@@ -21,7 +26,9 @@ from fastapi.staticfiles import StaticFiles
 
 DAILY_DIR = os.environ.get("DAILY_DIR", "/daily")
 RECORD_DIR = os.environ.get("RECORD_DIR", "/rec")
+CACHE_DIR = os.environ.get("CACHE_DIR", "/tmp/vigilante-cache")
 TZ = timezone(timedelta(hours=int(os.environ.get("TZ_OFFSET_HOURS", "-3"))))
+TODAY_CACHE_MAX_AGE = 45  # seconds; rebuild the "today so far" file if staler
 # base URL for mediamtx's built-in WHEP player page, one per camera at
 # <MEDIAMTX_URL>/<camera>/ -- must be reachable from the viewer's browser,
 # not just from inside this container, so it can't default to 127.0.0.1.
@@ -29,8 +36,12 @@ MEDIAMTX_URL = os.environ.get("MEDIAMTX_URL", "")
 
 DAY_RE = re.compile(r"^(\d{8})\.mp4$")
 SEG_RE = re.compile(r"^(\d{8})-(\d{6})\.mp4$")
+DATE_RE = re.compile(r"^\d{8}$")
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 CHUNK = 1024 * 1024
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+_locks = defaultdict(threading.Lock)
 
 app = FastAPI(title="VIGILANTE")
 
@@ -50,6 +61,70 @@ def _safe_cam(cam):
     return cam
 
 
+def _hhmmss_to_seconds(hhmmss):
+    return int(hhmmss[0:2]) * 3600 + int(hhmmss[2:4]) * 60 + int(hhmmss[4:6])
+
+
+def _today_segments(cam, date):
+    """(time, path, size) for date's real (non-stub) segments, oldest first."""
+    camdir = os.path.join(RECORD_DIR, cam)
+    out = []
+    if os.path.isdir(camdir):
+        for f in os.listdir(camdir):
+            m = SEG_RE.match(f)
+            if not m or m.group(1) != date:
+                continue
+            p = os.path.join(camdir, f)
+            try:
+                size = os.path.getsize(p)
+            except OSError:
+                continue
+            if size < 4096:  # empty stub from a just-started recorder
+                continue
+            out.append((m.group(2), p, size))
+    out.sort()
+    return out
+
+
+def _build_today_cache(cam, date):
+    """Stitch today's segments into one file under CACHE_DIR, rebuilding it
+    if stale. Returns (path, start_seconds) or None if nothing recorded yet.
+    """
+    segs = _today_segments(cam, date)
+    if not segs:
+        return None
+
+    key = f"{cam}-{date}"
+    cache_path = os.path.join(CACHE_DIR, f"{key}.mp4")
+    start_seconds = _hhmmss_to_seconds(segs[0][0])
+
+    with _locks[key]:
+        newest_seg_mtime = max(os.path.getmtime(p) for _, p, _ in segs)
+        stale = (
+            not os.path.isfile(cache_path)
+            or os.path.getmtime(cache_path) < newest_seg_mtime
+            or (time.time() - os.path.getmtime(cache_path)) > TODAY_CACHE_MAX_AGE
+        )
+        if stale:
+            listfile = os.path.join(CACHE_DIR, f"{key}.txt")
+            with open(listfile, "w") as fh:
+                for _, p, _ in segs:
+                    fh.write(f"file '{p}'\n")
+            tmp_out = cache_path + ".tmp"
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
+                   "-f", "concat", "-safe", "0", "-i", listfile,
+                   "-c", "copy", "-movflags", "+faststart",
+                   "-f", "mp4", tmp_out]  # -f mp4: tmp_out's ".tmp" suffix defeats ext-sniffing
+            rc = subprocess.run(cmd).returncode
+            os.remove(listfile)
+            if rc == 0:
+                os.replace(tmp_out, cache_path)  # atomic: safe for in-flight reads
+            elif not os.path.isfile(cache_path):
+                return None
+
+    return cache_path, start_seconds
+
+
 @app.get("/api/cameras")
 def cameras():
     return {"cameras": _cameras()}
@@ -62,10 +137,15 @@ def config():
 
 @app.get("/api/cameras/{cam}/days")
 def days(cam: str):
-    """Consolidated daily files, newest first."""
+    """One entry per day: past consolidated files plus today (stitched live
+    from segments), newest first. `start_seconds` is the wall-clock second of
+    the day the video starts at -- 0 for a full consolidated day, later for
+    today (whenever the first segment happened to start).
+    """
     _safe_cam(cam)
-    camdir = os.path.join(DAILY_DIR, cam)
     out = []
+
+    camdir = os.path.join(DAILY_DIR, cam)
     if os.path.isdir(camdir):
         for f in os.listdir(camdir):
             m = DAY_RE.match(f)
@@ -76,41 +156,24 @@ def days(cam: str):
                 "date": m.group(1),
                 "size": os.path.getsize(p),
                 "url": f"/media/daily/{cam}/{f}",
+                "start_seconds": 0,
+                "live": False,
             })
+
+    today = datetime.now(TZ).strftime("%Y%m%d")
+    if not any(d["date"] == today for d in out):
+        segs = _today_segments(cam, today)
+        if segs:
+            out.append({
+                "date": today,
+                "size": sum(sz for _, _, sz in segs),
+                "url": f"/media/today/{cam}/{today}.mp4",
+                "start_seconds": _hhmmss_to_seconds(segs[0][0]),
+                "live": True,
+            })
+
     out.sort(key=lambda x: x["date"], reverse=True)
     return {"camera": cam, "days": out}
-
-
-@app.get("/api/cameras/{cam}/today")
-def today_segments(cam: str):
-    """Today's not-yet-consolidated rolling segments, oldest first."""
-    _safe_cam(cam)
-    camdir = os.path.join(RECORD_DIR, cam)
-    today = datetime.now(TZ).strftime("%Y%m%d")
-    out = []
-    if os.path.isdir(camdir):
-        for f in os.listdir(camdir):
-            m = SEG_RE.match(f)
-            if not m or m.group(1) != today:
-                continue
-            p = os.path.join(camdir, f)
-            out.append({
-                "time": m.group(2),
-                "size": os.path.getsize(p),
-                "url": f"/media/rec/{cam}/{f}",
-            })
-    out.sort(key=lambda x: x["time"])
-    return {"camera": cam, "date": today, "segments": out}
-
-
-def _resolve(root, cam, filename, name_re):
-    _safe_cam(cam)
-    if not name_re.match(filename):
-        raise HTTPException(400, "bad filename")
-    path = os.path.join(root, cam, filename)
-    if not os.path.isfile(path):
-        raise HTTPException(404, "not found")
-    return path
 
 
 def _serve_video(path, request: Request):
@@ -162,12 +225,25 @@ def _serve_video(path, request: Request):
 
 @app.get("/media/daily/{cam}/{filename}")
 def media_daily(cam: str, filename: str, request: Request):
-    return _serve_video(_resolve(DAILY_DIR, cam, filename, DAY_RE), request)
+    _safe_cam(cam)
+    if not DAY_RE.match(filename):
+        raise HTTPException(400, "bad filename")
+    path = os.path.join(DAILY_DIR, cam, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "not found")
+    return _serve_video(path, request)
 
 
-@app.get("/media/rec/{cam}/{filename}")
-def media_rec(cam: str, filename: str, request: Request):
-    return _serve_video(_resolve(RECORD_DIR, cam, filename, SEG_RE), request)
+@app.get("/media/today/{cam}/{date}.mp4")
+def media_today(cam: str, date: str, request: Request):
+    _safe_cam(cam)
+    if not DATE_RE.match(date):
+        raise HTTPException(400, "bad date")
+    built = _build_today_cache(cam, date)
+    if not built:
+        raise HTTPException(404, "no segments recorded yet for that date")
+    path, _start_seconds = built
+    return _serve_video(path, request)
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

@@ -5,159 +5,229 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIGILANTE</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap');
+
   :root {
-    color-scheme: light dark;
-    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a;
-    --text: #e6e8eb; --muted: #8b92a0; --accent: #4f8cff; --live: #e5484d;
+    color-scheme: dark;
+    --bg: #0b0d12;
+    --surface: #12151c;
+    --surface-2: #171b24;
+    --border: #262b36;
+    --text: #eef0f4;
+    --muted: #8992a3;
+    --faint: #565f70;
+    --accent: #5b8cff;
+    --accent-dim: #5b8cff33;
+    --live: #ff4d5e;
+    --live-dim: #ff4d5e26;
+    --radius: 14px;
+    --radius-sm: 9px;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
     display: flex; flex-direction: column;
   }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+  [hidden] { display: none !important; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---------- header ---------- */
   header {
     flex: 0 0 auto;
-    padding: 14px 18px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 14px 22px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    background: linear-gradient(180deg, var(--surface), var(--bg));
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .06em; }
-  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-  .tabs button {
-    background: var(--panel); color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit;
-    text-transform: capitalize;
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .dot {
+    width: 9px; height: 9px; border-radius: 50%; background: var(--live);
+    box-shadow: 0 0 0 3px var(--live-dim);
+    animation: pulse 2s ease-in-out infinite;
   }
-  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .tabs button[data-tab="dashboard"] { text-transform: none; letter-spacing: .04em; }
-  .live-dot {
-    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-    background: var(--live); margin-right: 6px; vertical-align: 1px;
-    animation: pulse 1.6s ease-in-out infinite;
+  header h1 {
+    font-size: 15px; margin: 0; font-weight: 800; letter-spacing: .16em;
   }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
-  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
-  main#single { flex: 1 1 auto; min-height: 0; overflow-y: auto; width: 100%; }
-  [hidden] { display: none !important; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
 
-  /* --- dashboard: all cameras, full screen --- */
-  main#dashboard {
-    padding: 0; margin: 0; max-width: none;
-    flex: 1 1 auto; min-height: 0; /* fill the rest of the viewport under the header */
+  .tabs { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border);
+          border-radius: 10px; padding: 3px; }
+  .tabs button {
+    background: transparent; color: var(--muted); border: 0;
+    border-radius: 7px; padding: 7px 16px; cursor: pointer; font: inherit;
+    font-weight: 600; font-size: 13px; text-transform: capitalize;
+    transition: background .15s, color .15s;
   }
-  .dashboard {
-    height: 100%;
-    display: grid; grid-template-columns: 1fr; grid-auto-rows: 1fr; gap: 2px;
-  }
+  .tabs button:hover { color: var(--text); }
+  .tabs button.active { background: var(--accent); color: #fff; }
+  .tabs button[data-tab="dashboard"] { text-transform: none; letter-spacing: .03em; }
+
+  main { padding: 20px; max-width: 1500px; margin: 0 auto; width: 100%; }
+  main#dashboard { padding: 0; margin: 0; max-width: none; flex: 1 1 auto; min-height: 0; }
+  main#single { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+  /* ---------- dashboard: full-bleed live wall ---------- */
+  .dashboard { height: 100%; display: grid; grid-template-columns: 1fr; grid-auto-rows: 1fr; gap: 2px; background: var(--border); }
   @media (min-width: 700px) {
     .dashboard.n2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
     .dashboard.n3, .dashboard.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
   }
-  .tile {
-    background: #000; overflow: hidden; cursor: pointer;
-    position: relative; min-height: 0;
-  }
+  .tile { background: #000; overflow: hidden; cursor: pointer; position: relative; min-height: 0; }
   .tile iframe { width: 100%; height: 100%; border: 0; pointer-events: none; }
   .tile .label {
-    position: absolute; left: 14px; top: 12px; padding: 5px 14px;
-    background: rgba(0,0,0,.55); border-radius: 6px; font-weight: 600;
-    font-size: 15px; text-transform: capitalize; backdrop-filter: blur(2px);
+    position: absolute; left: 16px; top: 14px; padding: 6px 14px;
+    background: rgba(10,12,16,.6); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px; font-weight: 700; font-size: 15px;
+    text-transform: capitalize; backdrop-filter: blur(6px);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .tile .label .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); animation: pulse 2s ease-in-out infinite; }
+  .tile:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  /* ---------- single camera view ---------- */
+  .cam-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .cam-title { font-size: 20px; font-weight: 800; text-transform: capitalize; letter-spacing: -.01em; }
+  .live-btn {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+    padding: 8px 16px; border-radius: 10px; cursor: pointer; font: inherit; font-weight: 700;
+    font-size: 13px; letter-spacing: .04em; transition: all .15s;
+  }
+  .live-btn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .live-btn.active { background: var(--live-dim); border-color: var(--live); color: var(--live); }
+  .live-btn.active .dot { background: var(--live); animation: pulse 1.6s ease-in-out infinite; }
+  .live-btn:hover { border-color: var(--accent); color: var(--text); }
+  .live-btn.active:hover { border-color: var(--live); color: var(--live); }
+
+  .viewport {
+    background: #000; border-radius: var(--radius); overflow: hidden;
+    aspect-ratio: 16/9; max-height: 62vh; position: relative;
+    border: 1px solid var(--border);
+  }
+  .viewport iframe, .viewport video { width: 100%; height: 100%; border: 0; display: block; }
+  .viewport .empty {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--faint); font-size: 13px; text-align: center; padding: 0 24px;
   }
 
-  /* --- single camera: live + recordings, one screen --- */
-  .single-live {
-    background: #000; border-radius: 10px; overflow: hidden;
-    aspect-ratio: 21/9; max-height: 60vh;
+  /* ---------- scrub bar (playback mode only) ---------- */
+  .scrub {
+    margin-top: 14px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 18px;
   }
-  .single-live iframe { width: 100%; height: 100%; border: 0; }
-  .cam-title {
-    margin: 16px 0 10px; font-size: 15px; font-weight: 700;
-    text-transform: capitalize; display: flex; align-items: center; gap: 8px;
+  .scrub-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  .scrub-clock { font-size: 24px; font-weight: 700; letter-spacing: .02em; }
+  .scrub-clock .sep { color: var(--faint); }
+  .scrub-jump { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .scrub-jump input[type="time"] {
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 6px 10px; font: inherit; font-weight: 600;
+    color-scheme: dark;
   }
-  .rec-area {
-    display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 16px;
+  input[type="range"].timeline {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
+    border-radius: 99px; background: var(--surface-2); cursor: pointer; outline: none;
   }
-  @media (min-width: 900px) {
-    .rec-area { grid-template-columns: 2fr 1fr; align-items: start; }
+  input[type="range"].timeline::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: 3px solid #fff2; cursor: pointer;
+    box-shadow: 0 0 0 4px var(--accent-dim);
   }
-  .player {
-    background: #000; border-radius: 8px; overflow: hidden;
-    aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
+  input[type="range"].timeline::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%; background: var(--accent);
+    border: 3px solid #fff2; cursor: pointer; box-shadow: 0 0 0 4px var(--accent-dim);
   }
-  video { width: 100%; height: 100%; display: block; }
-  .placeholder { color: var(--muted); font-size: 13px; text-align: center; padding: 0 20px; }
-  .panel {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px; max-height: 50vh; overflow-y: auto;
+  .scrub-ends { display: flex; justify-content: space-between; margin-top: 6px; color: var(--faint); font-size: 12px; }
+
+  /* ---------- day picker ---------- */
+  .days { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .day-pill {
+    background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+    padding: 9px 16px; border-radius: 10px; cursor: pointer; font: inherit;
+    font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px;
+    transition: all .15s;
   }
-  .panel h2 {
-    font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
-    color: var(--muted); margin: 0 0 8px;
-  }
-  .panel + .panel { margin-top: 16px; }
-  ul { list-style: none; margin: 0; padding: 0; }
-  li button {
-    width: 100%; text-align: left; background: none; border: none; color: var(--text);
-    padding: 8px 6px; border-radius: 6px; cursor: pointer; font: inherit;
-    display: flex; justify-content: space-between; gap: 8px;
-  }
-  li button:hover { background: #232834; }
-  li button.playing { background: var(--accent); color: #fff; }
-  li .size { color: var(--muted); font-variant-numeric: tabular-nums; }
-  li button.playing .size { color: #dbe6ff; }
-  .empty { color: var(--muted); padding: 8px 6px; }
+  .day-pill:hover { border-color: var(--accent); color: var(--text); }
+  .day-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .day-pill.today { border-color: var(--live); color: var(--live); }
+  .day-pill.today.active { background: var(--live); border-color: var(--live); color: #fff; }
+  .day-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; }
+  .day-pill .size { color: var(--faint); font-weight: 500; }
+  .day-pill.active .size { color: #ffffffaa; }
+  .empty-note { color: var(--faint); font-size: 13px; padding: 4px 0; }
 </style>
 </head>
 <body>
 <header>
-  <h1>VIGILANTE</h1>
+  <div class="brand"><span class="dot"></span><h1>VIGILANTE</h1></div>
   <div class="tabs" id="tabs"></div>
 </header>
 
 <main id="dashboard" class="dashboard"></main>
 
 <main id="single" hidden>
-  <div class="single-live" id="single-live"></div>
-  <div class="cam-title"><span class="live-dot"></span><span id="cam-name"></span></div>
-  <div class="rec-area">
-    <div class="player">
-      <video id="video" controls playsinline></video>
-      <div class="placeholder" id="placeholder">Elegí una grabación de la derecha para verla acá</div>
+  <div class="cam-bar">
+    <div class="cam-title" id="cam-name"></div>
+    <button class="live-btn active" id="live-btn"><span class="dot"></span><span id="live-btn-label">EN VIVO</span></button>
+  </div>
+
+  <div class="viewport" id="viewport">
+    <div class="empty" id="viewport-empty">Vista en vivo no configurada</div>
+  </div>
+
+  <div class="scrub" id="scrub" hidden>
+    <div class="scrub-top">
+      <div class="scrub-clock mono"><span id="clock">00:00:00</span></div>
+      <div class="scrub-jump">
+        ir a
+        <input type="time" step="1" id="jump-input">
+      </div>
     </div>
-    <div>
-      <div class="panel">
-        <h2>Hoy (segmentos sin consolidar)</h2>
-        <ul id="today"><li class="empty">-</li></ul>
-      </div>
-      <div class="panel">
-        <h2>Días anteriores</h2>
-        <ul id="days"><li class="empty">-</li></ul>
-      </div>
+    <input type="range" class="timeline" id="timeline" min="0" max="100" value="0" step="0.1">
+    <div class="scrub-ends mono">
+      <span id="range-start">00:00:00</span>
+      <span id="range-end">00:00:00</span>
     </div>
   </div>
+
+  <div class="days" id="days"></div>
+  <div class="empty-note" id="days-empty" hidden>Sin grabaciones todavía para esta cámara</div>
 </main>
 
 <script>
 const $ = (s) => document.querySelector(s);
-const video = $("#video"), placeholder = $("#placeholder");
-let cameras = [], mediamtxUrl = "", currentCam = null, activeBtn = null, activeUrl = null;
+const viewport = $("#viewport");
+const scrub = $("#scrub"), timeline = $("#timeline"), clock = $("#clock");
+const jumpInput = $("#jump-input"), rangeStart = $("#range-start"), rangeEnd = $("#range-end");
+const liveBtn = $("#live-btn"), liveBtnLabel = $("#live-btn-label");
+let cameras = [], mediamtxUrl = "", currentCam = null, currentDays = [], activeDay = null;
+let video = null, dragging = false;
 
 function fmtSize(bytes) {
   const mb = bytes / 1e6;
   return mb >= 1000 ? (mb / 1000).toFixed(1) + " GB" : mb.toFixed(0) + " MB";
 }
-function fmtTime(hhmmss) {
-  return hhmmss.slice(0, 2) + ":" + hhmmss.slice(2, 4) + ":" + hhmmss.slice(4, 6);
-}
 function fmtDate(yyyymmdd) {
   return `${yyyymmdd.slice(6, 8)}/${yyyymmdd.slice(4, 6)}/${yyyymmdd.slice(0, 4)}`;
 }
-function liveSrc(cam) {
-  return `${mediamtxUrl}/${cam}/`;
+function fmtHMS(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds)) % 86400;
+  const h = String(Math.floor(s / 3600)).padStart(2, "0");
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const sec = String(s % 60).padStart(2, "0");
+  return `${h}:${m}:${sec}`;
 }
+function liveSrc(cam) { return `${mediamtxUrl}/${cam}/`; }
 
-// --- tabs: DASHBOARD + one per camera ---
+// ---------------- tabs ----------------
 function buildTabs() {
   const tabs = $("#tabs");
   tabs.innerHTML = "";
@@ -167,7 +237,6 @@ function buildTabs() {
     b.dataset.tab = tab;
     b.onclick = () => showTab(tab);
     tabs.appendChild(b);
-    return b;
   };
   mk("dashboard", "DASHBOARD");
   cameras.forEach((cam) => mk(cam, cam));
@@ -178,99 +247,123 @@ function showTab(tab) {
     (b) => b.classList.toggle("active", b.dataset.tab === tab));
   if (tab === "dashboard") {
     currentCam = null;
-    $("#single-live").innerHTML = "";
+    document.title = "VIGILANTE";
     $("#single").hidden = true;
     $("#dashboard").hidden = false;
-    document.title = "VIGILANTE";
   } else {
     showCamera(tab);
   }
 }
 
-// --- dashboard: every camera, live, big ---
+// ---------------- dashboard ----------------
 function buildDashboard() {
   const grid = $("#dashboard");
   grid.className = "dashboard n" + cameras.length;
   grid.innerHTML = "";
   if (!cameras.length) {
-    grid.innerHTML = '<div class="placeholder">Sin cámaras</div>';
+    grid.innerHTML = '<div class="empty">Sin cámaras</div>';
     return;
   }
   cameras.forEach((cam) => {
     const tile = document.createElement("div");
     tile.className = "tile";
     tile.innerHTML = mediamtxUrl
-      ? `<iframe src="${liveSrc(cam)}" allow="autoplay"></iframe><span class="label">${cam}</span>`
+      ? `<iframe src="${liveSrc(cam)}" allow="autoplay"></iframe><span class="label"><span class="dot"></span>${cam}</span>`
       : `<span class="label">${cam}</span>`;
     tile.onclick = () => showTab(cam);
     grid.appendChild(tile);
   });
 }
 
-// --- single camera: its own live view + recordings, same screen ---
-function showCamera(cam) {
-  currentCam = cam;
-  activeBtn = null; activeUrl = null;
-  video.removeAttribute("src");
-  video.style.display = "none";
-  placeholder.style.display = "block";
+// ---------------- single camera ----------------
+function goLive() {
+  activeDay = null;
+  document.querySelectorAll(".day-pill").forEach((b) => b.classList.remove("active"));
+  liveBtn.classList.add("active");
+  liveBtnLabel.textContent = "EN VIVO";
+  scrub.hidden = true;
+  video = null;
+  if (mediamtxUrl) {
+    viewport.innerHTML = `<iframe src="${liveSrc(currentCam)}" allow="autoplay"></iframe>`;
+  } else {
+    viewport.innerHTML = '<div class="empty">Vista en vivo no configurada</div>';
+  }
+}
+liveBtn.onclick = goLive;
 
+function selectDay(day, btn) {
+  activeDay = day;
+  document.querySelectorAll(".day-pill").forEach((b) => b.classList.remove("active"));
+  if (btn) btn.classList.add("active");
+  liveBtn.classList.remove("active");
+  liveBtnLabel.textContent = "VOLVER A VIVO";
+
+  viewport.innerHTML = "";
+  video = document.createElement("video");
+  video.controls = true;
+  video.playsInline = true;
+  video.autoplay = true;
+  video.src = day.url;
+  viewport.appendChild(video);
+
+  scrub.hidden = false;
+  rangeStart.textContent = fmtHMS(day.start_seconds);
+  timeline.value = 0;
+  clock.textContent = fmtHMS(day.start_seconds);
+  jumpInput.value = fmtHMS(day.start_seconds);
+
+  video.addEventListener("loadedmetadata", () => {
+    timeline.max = video.duration || 0;
+    rangeEnd.textContent = fmtHMS(day.start_seconds + (video.duration || 0));
+  });
+  video.addEventListener("timeupdate", () => {
+    if (!dragging) timeline.value = video.currentTime;
+    clock.textContent = fmtHMS(day.start_seconds + video.currentTime);
+    jumpInput.value = fmtHMS(day.start_seconds + video.currentTime);
+  });
+}
+
+timeline.addEventListener("input", () => {
+  dragging = true;
+  clock.textContent = fmtHMS((activeDay ? activeDay.start_seconds : 0) + Number(timeline.value));
+});
+timeline.addEventListener("change", () => {
+  if (video) video.currentTime = Number(timeline.value);
+  dragging = false;
+});
+jumpInput.addEventListener("change", () => {
+  if (!video || !activeDay) return;
+  const [h, m, s] = jumpInput.value.split(":").map(Number);
+  const target = (h * 3600 + m * 60 + (s || 0)) - activeDay.start_seconds;
+  video.currentTime = Math.min(Math.max(target, 0), video.duration || 0);
+});
+
+function buildDayPills(days) {
+  const wrap = $("#days");
+  wrap.innerHTML = "";
+  $("#days-empty").hidden = !!days.length;
+  days.forEach((d) => {
+    const b = document.createElement("button");
+    b.className = "day-pill" + (d.live ? " today" : "");
+    b.innerHTML = d.live
+      ? `<span class="dot"></span>Hoy <span class="size">${fmtSize(d.size)}</span>`
+      : `${fmtDate(d.date)} <span class="size">${fmtSize(d.size)}</span>`;
+    b.onclick = () => selectDay(d, b);
+    wrap.appendChild(b);
+  });
+}
+
+async function showCamera(cam) {
+  currentCam = cam;
+  document.title = `VIGILANTE — ${cam}`;
   $("#dashboard").hidden = true;
   $("#single").hidden = false;
   $("#cam-name").textContent = cam;
-  $("#single-live").innerHTML = mediamtxUrl
-    ? `<iframe src="${liveSrc(cam)}" allow="autoplay"></iframe>` : "";
-  document.title = `VIGILANTE — ${cam}`;
-  loadRecordings(cam);
-}
+  goLive();
 
-function play(url, label, btn) {
-  if (activeUrl !== url) {
-    video.src = url;
-    video.play().catch(() => {});
-    activeUrl = url;
-  }
-  placeholder.style.display = "none";
-  video.style.display = "block";
-  if (activeBtn) activeBtn.classList.remove("playing");
-  if (btn) { btn.classList.add("playing"); activeBtn = btn; }
-}
-
-async function loadRecordings(cam) {
-  const [today, days] = await Promise.all([
-    fetch(`/api/cameras/${cam}/today`).then((r) => r.json()),
-    fetch(`/api/cameras/${cam}/days`).then((r) => r.json()),
-  ]);
-
-  const todayUl = $("#today");
-  todayUl.innerHTML = "";
-  if (!today.segments.length) {
-    todayUl.innerHTML = '<li class="empty">sin segmentos todavía</li>';
-  } else {
-    [...today.segments].reverse().forEach((s) => {
-      const li = document.createElement("li");
-      const btn = document.createElement("button");
-      btn.innerHTML = `<span>${fmtTime(s.time)}</span><span class="size">${fmtSize(s.size)}</span>`;
-      btn.onclick = () => play(s.url, `${cam} ${fmtTime(s.time)}`, btn);
-      li.appendChild(btn);
-      todayUl.appendChild(li);
-    });
-  }
-
-  const daysUl = $("#days");
-  daysUl.innerHTML = "";
-  if (!days.days.length) {
-    daysUl.innerHTML = '<li class="empty">sin días consolidados todavía</li>';
-  } else {
-    days.days.forEach((d) => {
-      const li = document.createElement("li");
-      const btn = document.createElement("button");
-      btn.innerHTML = `<span>${fmtDate(d.date)}</span><span class="size">${fmtSize(d.size)}</span>`;
-      btn.onclick = () => play(d.url, `${cam} ${fmtDate(d.date)}`, btn);
-      li.appendChild(btn);
-      daysUl.appendChild(li);
-    });
-  }
+  const { days } = await fetch(`/api/cameras/${cam}/days`).then((r) => r.json());
+  currentDays = days;
+  buildDayPills(days);
 }
 
 async function init() {
@@ -286,11 +379,20 @@ async function init() {
 }
 init();
 
-// keep the current camera's recordings list fresh, and the dashboard's
-// selection state, without a manual reload
+// keep the day list fresh (new segments / a rolled-over "today") without reload
 setInterval(() => {
-  if (currentCam) loadRecordings(currentCam);
-}, 30000);
+  if (currentCam) {
+    fetch(`/api/cameras/${currentCam}/days`).then((r) => r.json()).then(({ days }) => {
+      currentDays = days;
+      buildDayPills(days);
+      if (activeDay) {
+        const b = [...document.querySelectorAll(".day-pill")]
+          .find((_, i) => days[i] && days[i].date === activeDay.date);
+        if (b) b.classList.add("active");
+      }
+    });
+  }
+}, 45000);
 </script>
 </body>
 </html>
