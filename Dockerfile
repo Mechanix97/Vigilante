@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
-# ffmpeg stitches today's segments into one playable file (see
-# _build_today_cache in main.py) -- remux only (-c copy), so this is cheap.
+# ffprobe reads how long each segment actually runs, which is what anchors
+# the timeline; the full ffmpeg package is the simplest way to get it.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 

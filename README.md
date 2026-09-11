@@ -27,9 +27,10 @@ writes into them. Live video is mediamtx's own WebRTC player, embedded.
                                                                               (playback)
 ```
 
-VIGILANTE only needs the two directories and the mediamtx URL. It stitches the
-current day's still-accumulating segments into one continuously seekable file
-on demand, so "today" scrubs exactly like any finished day.
+VIGILANTE only needs the two directories and the mediamtx URL. A finished day
+plays from its one consolidated file; today plays straight from the segments,
+chained one into the next, so the newest footage available is the one being
+written right now.
 
 ## The timeline
 
@@ -87,7 +88,7 @@ in front of it if that ever stops being true.
 | `GET /api/config` | `{mediamtx_url, live_enabled}` for the frontend |
 | `GET /api/cameras/{cam}/days` | one entry per day, newest first, each with its timeline `breaks` |
 | `GET /media/daily/{cam}/{file}` | a consolidated day (HTTP Range supported) |
-| `GET /media/today/{cam}/{date}.mp4` | today's segments stitched on demand |
+| `GET /media/rec/{cam}/{file}` | one raw segment, including the one being recorded (HTTP Range supported) |
 
 ## Environment variables
 
@@ -95,18 +96,22 @@ in front of it if that ever stops being true.
 |---|---|---|
 | `DAILY_DIR` | `/daily` | consolidated daily files |
 | `RECORD_DIR` | `/rec` | rolling segments |
-| `CACHE_DIR` | `/tmp/vigilante-cache` | where today's stitched file is kept; ephemeral, rebuilt on demand |
 | `TZ_OFFSET_HOURS` | `-3` | used to decide which day "today" is; match aidot-camera-webrtc's `TZ` |
 | `MEDIAMTX_URL` | — | base URL of mediamtx's WebRTC listener (e.g. `http://homelab:8889`), reachable from the *browser*. Unset hides live view. |
 
 ## Notes
 
-* Stitching today's segments uses a stream copy, which is cheap regardless of
-  how long the day is. ffmpeg's concat demuxer can silently truncate (exit
-  code 0!) when two adjacent segments carry incompatible H.264 parameter sets
-  — which happens when the recorder restarts mid-day — so the result's
-  duration is verified against the sum of the parts, and a decode + re-encode
-  concat is used as a fallback.
+* Today is deliberately *not* stitched into one file. It was, at first —
+  and a stitched day is stale the moment it is built: by evening the concat
+  takes minutes while the recorder keeps going, so rewinding a minute from
+  live landed wherever the last stitch happened to stop, over an hour earlier.
+  Playing the segments directly costs one `<video>` reload per 10 minutes of
+  continuous watching and in exchange "a minute ago" is a minute ago.
+* The segment currently being written has no duration in its header (it is
+  muxed fragmented, `empty_moov`, precisely so it is playable before it is
+  closed), so its length is taken as "from its start until now".
+* Segment durations are memoised on `(path, size)`: a finished segment is
+  probed once, the growing one is re-probed each time it changes.
 * No thumbnails on the day picker yet.
 * Motion detection is deliberately out of scope; the recording layout and this
   app's read-only API are meant to stay stable for a future companion that

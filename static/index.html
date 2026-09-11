@@ -67,18 +67,38 @@
   .tabs button.active { background: var(--accent); color: #fff; }
   .tabs button[data-tab="dashboard"] { text-transform: none; letter-spacing: .03em; }
 
-  main { padding: 20px; max-width: 1500px; margin: 0 auto; width: 100%; }
-  main#dashboard { padding: 0; margin: 0; max-width: none; flex: 1 1 auto; min-height: 0; }
-  main#single { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-
-  /* ---------- dashboard: full-bleed live wall ---------- */
-  .dashboard { height: 100%; display: grid; grid-template-columns: 1fr; grid-auto-rows: 1fr; gap: 2px; background: var(--border); }
-  @media (min-width: 700px) {
-    .dashboard.n2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
-    .dashboard.n3, .dashboard.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  /* ---------- the stage ----------
+     There is exactly one live iframe per camera, and it stays put: moving an
+     iframe in the DOM reloads it, which means a fresh WebRTC negotiation and
+     a second or three of black. So the wall is never rebuilt between the
+     dashboard and a single camera -- the same tiles are re-laid-out by these
+     two modes, and the picture you were already watching just gets bigger. */
+  #stage { position: relative; background: #000; }
+  body.mode-wall #stage { flex: 1 1 auto; min-height: 0; }
+  body.mode-solo #stage {
+    /* width-driven 16:9 box: aspect-ratio derives the height, so it never
+       stretches regardless of how tall the viewport is */
+    width: calc(100% - 40px); max-width: 1100px; margin: 20px auto 0;
+    aspect-ratio: 16/9; flex: 0 0 auto;
+    border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
   }
+
+  .wall {
+    height: 100%; display: grid; grid-template-columns: 1fr;
+    grid-auto-rows: 1fr; gap: 2px; background: var(--border);
+  }
+  @media (min-width: 700px) {
+    body.mode-wall .wall.n2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+    body.mode-wall .wall.n3, body.mode-wall .wall.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  }
+  body.mode-solo .wall { grid-template-columns: 1fr; gap: 0; }
+  body.mode-solo .tile:not(.active) { display: none; }
+  body.mode-solo .tile { cursor: default; }
+  body.mode-solo .tile:hover { outline: none; }
+  body.mode-solo .tile .label { display: none; }  /* the tab already says which */
+
   .tile { background: #000; overflow: hidden; cursor: pointer; position: relative; min-height: 0; }
-  .tile iframe { width: 100%; height: 100%; border: 0; pointer-events: none; }
+  .tile iframe { width: 100%; height: 100%; border: 0; pointer-events: none; display: block; }
   .tile .label {
     position: absolute; left: 16px; top: 14px; padding: 6px 14px;
     background: rgba(10,12,16,.6); border: 1px solid rgba(255,255,255,.08);
@@ -89,28 +109,30 @@
   .tile .label .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); animation: pulse 2s ease-in-out infinite; }
   .tile:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-  /* ---------- single camera view: no title, straight to the picture ---------- */
-  /* width-driven 16:9 box, centered: aspect-ratio derives the height, so it
-     never stretches/distorts regardless of how tall the viewport is */
-  .viewport-wrap { display: flex; justify-content: center; }
-  .viewport {
-    background: #000; border-radius: var(--radius); overflow: hidden;
-    aspect-ratio: 16/9; width: 100%; max-width: 1100px;
-    position: relative; border: 1px solid var(--border);
-  }
-  .viewport iframe, .viewport video { width: 100%; height: 100%; border: 0; display: block; }
-  .viewport .empty {
+  /* recordings play on a layer over the wall; the live streams underneath
+     stay connected, so going back to live is immediate */
+  #play-layer { position: absolute; inset: 0; background: #000; }
+  #play-layer video { width: 100%; height: 100%; border: 0; display: block; }
+  #stage .empty {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     color: var(--faint); font-size: 13px; text-align: center; padding: 0 24px;
   }
 
   /* ---------- scrub bar: live toggle + day picker + jump, always live ---------- */
   .scrub {
-    margin: 14px auto 0; max-width: 1100px;
+    margin: 14px auto 0; width: calc(100% - 40px); max-width: 1100px;
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 16px 18px;
   }
-  .scrub-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  /* three columns so the transport is exactly centred regardless of how wide
+     the live button or the selects happen to be */
+  .scrub-top {
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+    gap: 10px; margin-bottom: 12px;
+  }
+  .scrub-top > .live-btn { justify-self: start; }
+  .scrub-top > .transport { justify-self: center; }
+  .scrub-top > .scrub-controls { justify-self: end; }
   .live-btn {
     display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
     background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
@@ -123,16 +145,29 @@
   .live-btn:hover { border-color: var(--accent); color: var(--text); }
   .live-btn.active:hover { border-color: var(--live); color: var(--live); }
 
-  .transport { display: flex; align-items: center; gap: 4px; }
-  .transport button {
-    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 8px; width: 36px; height: 32px; cursor: pointer; font: inherit; font-size: 15px;
-    display: flex; align-items: center; justify-content: center; transition: all .15s;
+  /* transport sits in the middle of the row, flanked by the live button and
+     the selects; on a phone the row wraps and it centres on its own line */
+  .transport {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 auto; order: 2;
   }
-  .transport button:hover:not(:disabled) { border-color: var(--accent); }
-  .transport button:disabled { opacity: .35; cursor: default; }
+  .transport button, .icon-btn {
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; cursor: pointer; padding: 0;
+    display: flex; align-items: center; justify-content: center; transition: all .15s;
+    width: 40px; height: 38px;
+  }
+  .transport button svg, .icon-btn svg { width: 21px; height: 21px; }
+  .transport button.primary {
+    width: 48px; height: 44px; background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  .transport button.primary svg { width: 19px; height: 19px; }
+  .transport button:hover:not(:disabled), .icon-btn:hover { border-color: var(--accent); }
+  .transport button.primary:hover:not(:disabled) { filter: brightness(1.12); }
+  .transport button:disabled { opacity: .3; cursor: default; }
 
-  .scrub-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  .scrub-controls { display: flex; align-items: center; gap: 8px; order: 3; }
+  .live-btn { order: 1; }
   #day-select, #speed-select {
     background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
     border-radius: 8px; padding: 7px 10px; font: inherit; font-weight: 600; font-size: 13px;
@@ -158,31 +193,85 @@
   .scrub-clock {
     margin-top: 12px; text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .03em;
   }
+
+  /* ---------- phone ---------- */
+  @media (max-width: 680px) {
+    header { padding: 10px 14px; gap: 10px; }
+    header h1 { font-size: 13px; }
+    .tabs { width: 100%; overflow-x: auto; }
+    .tabs button { padding: 9px 14px; font-size: 14px; }
+    main { padding: 10px; }
+    body.mode-solo #stage { width: calc(100% - 20px); margin-top: 10px; border-radius: 10px; }
+    .scrub { width: calc(100% - 20px); }
+    .scrub { margin-top: 10px; padding: 12px 12px 14px; border-radius: 12px; }
+    /* one row for the transport, one for everything else */
+    .scrub-top { grid-template-columns: 1fr 1fr; gap: 10px; }
+    .scrub-top > .transport {
+      grid-column: 1 / -1; order: -1; gap: 14px;
+    }
+    .scrub-top > .live-btn { justify-self: start; }
+    .scrub-top > .scrub-controls { justify-self: end; }
+    /* fingers, not cursors */
+    .transport button { width: 52px; height: 48px; }
+    .transport button svg { width: 26px; height: 26px; }
+    .transport button.primary { width: 62px; height: 52px; }
+    .transport button.primary svg { width: 23px; height: 23px; }
+    .icon-btn { width: 44px; height: 42px; }
+    #day-select, #speed-select { padding: 9px 8px; font-size: 14px; }
+    input[type="range"].timeline { height: 10px; }
+    input[type="range"].timeline::-webkit-slider-thumb { width: 24px; height: 24px; }
+    input[type="range"].timeline::-moz-range-thumb { width: 24px; height: 24px; }
+    .scrub-clock { font-size: 30px; }
+    /* stack the wall on phones so each camera is still worth looking at */
+    body.mode-wall .wall.n2, body.mode-wall .wall.n3, body.mode-wall .wall.n4 { grid-template-columns: 1fr; }
+  }
+
+  /* the stage itself goes fullscreen, so it must fill the screen there */
+  #stage:fullscreen, #stage:-webkit-full-screen {
+    width: 100vw; height: 100vh; max-width: none; aspect-ratio: auto;
+    margin: 0; border: 0; border-radius: 0;
+  }
+  #stage:fullscreen video, #stage:fullscreen iframe { object-fit: contain; }
 </style>
 </head>
-<body>
+<body class="mode-wall">
 <header>
   <div class="brand"><span class="dot"></span><h1>VIGILANTE</h1></div>
   <div class="tabs" id="tabs"></div>
 </header>
 
-<main id="dashboard" class="dashboard"></main>
+<main id="stage">
+  <div class="wall" id="wall"></div>
+  <div id="play-layer" hidden></div>
+  <div class="empty" id="stage-empty" hidden>Cargando…</div>
+</main>
 
-<main id="single" hidden>
-  <div class="viewport-wrap">
-    <div class="viewport" id="viewport">
-      <div class="empty">Cargando…</div>
-    </div>
-  </div>
-
+<div id="single" hidden>
   <div class="scrub">
     <div class="scrub-top">
       <button class="live-btn active" id="live-btn"><span class="dot"></span><span id="live-btn-label">EN VIVO</span></button>
+
       <div class="transport">
-        <button id="back10-btn" title="Retroceder 10s" disabled>⏪</button>
-        <button id="play-btn" title="Pausar/Reproducir" disabled>⏸</button>
-        <button id="fwd10-btn" title="Avanzar 10s" disabled>⏩</button>
+        <button id="back10-btn" title="Retroceder 10s" aria-label="Retroceder 10 segundos" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5V2L7.5 6 12 10V7a6.5 6.5 0 1 1-6.4 7.7"/>
+            <text x="12" y="16.6" font-size="7.5" font-weight="700" text-anchor="middle"
+                  fill="currentColor" stroke="none">10</text>
+          </svg>
+        </button>
+        <button id="play-btn" class="primary" title="Pausar / Reproducir"
+                aria-label="Pausar o reproducir" disabled></button>
+        <button id="fwd10-btn" title="Avanzar 10s" aria-label="Avanzar 10 segundos" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5V2l4.5 4L12 10V7a6.5 6.5 0 1 0 6.4 7.7"/>
+            <text x="12" y="16.6" font-size="7.5" font-weight="700" text-anchor="middle"
+                  fill="currentColor" stroke="none">10</text>
+          </svg>
+        </button>
       </div>
+
       <div class="scrub-controls">
         <select id="speed-select" disabled>
           <option value="0.5">0.5×</option>
@@ -192,16 +281,23 @@
           <option value="4">4×</option>
         </select>
         <select id="day-select"></select>
+        <button id="fs-btn" class="icon-btn" title="Pantalla completa" aria-label="Pantalla completa">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/>
+          </svg>
+        </button>
       </div>
     </div>
     <input type="range" class="timeline" id="timeline" min="0" max="0" value="0" step="0.1">
     <div class="scrub-clock mono" id="clock">--:--:--</div>
   </div>
-</main>
+</div>
 
 <script>
 const $ = (s) => document.querySelector(s);
-const viewport = $("#viewport");
+const stage = $("#stage"), wall = $("#wall");
+const playLayer = $("#play-layer"), vpEmpty = $("#stage-empty");
 const timeline = $("#timeline"), clock = $("#clock");
 const daySelect = $("#day-select"), speedSelect = $("#speed-select");
 const liveBtn = $("#live-btn"), liveBtnLabel = $("#live-btn-label");
@@ -209,6 +305,8 @@ const playBtn = $("#play-btn"), back10Btn = $("#back10-btn"), fwd10Btn = $("#fwd
 let cameras = [], mediamtxUrl = "", currentCam = null;
 let allDays = [], activeDay = null, atLiveEdge = false;
 let video = null, dragging = false, liveClockTimer = null;
+let curSeg = -1, pendingSeek = null, lastEnded = { seg: -1, at: -1 };
+const daysCache = {};   // per camera, so reopening a tab draws immediately
 
 function fmtDate(yyyymmdd) {
   return `${yyyymmdd.slice(6, 8)}/${yyyymmdd.slice(4, 6)}/${yyyymmdd.slice(0, 4)}`;
@@ -221,10 +319,6 @@ function fmtHMS(totalSeconds) {
   return `${h}:${m}:${sec}`;
 }
 function liveSrc(cam) { return `${mediamtxUrl}/${cam}/`; }
-function totalDuration(day) {
-  const last = day.breaks[day.breaks.length - 1];
-  return last ? last.cum + (last.dur ?? 0) : 0;
-}
 
 // ---------------- video position <-> wall-clock mapping ----------------
 // `breaks` is [{cum, wall, dur}], dur:null meaning "runs to the end".
@@ -236,6 +330,85 @@ function videoToWall(breaks, v) {
   const last = breaks[breaks.length - 1];
   return last ? last.wall + (last.dur ?? 0) : 0;
 }
+function wallToVideo(breaks, w) {
+  for (const b of breaks) {
+    const d = b.dur == null ? Infinity : b.dur;
+    if (w >= b.wall && w < b.wall + d) return b.cum + (w - b.wall);
+  }
+  // asked for a moment inside a gap, or past what has been stitched so far:
+  // land on the nearest edge we do have rather than leaving the player stuck
+  let best = 0, bestDist = Infinity;
+  for (const b of breaks) {
+    const d = b.dur == null ? 0 : b.dur;
+    for (const [vv, ww] of [[b.cum, b.wall], [b.cum + d, b.wall + d]]) {
+      const dist = Math.abs(w - ww);
+      if (dist < bestDist) { bestDist = dist; best = vv; }
+    }
+  }
+  return best;
+}
+function dayStartWall(day) {
+  return day.breaks.length ? day.breaks[0].wall : 0;
+}
+function dayEndWall(day) {
+  const last = day.breaks[day.breaks.length - 1];
+  if (!last) return 0;
+  // a day consolidated before aidot-webrtc wrote timeline sidecars: how long
+  // it runs is only known once the browser has the file's metadata, so span
+  // the rest of the day for now and narrow it in `loadedmetadata`
+  return last.dur == null ? 86399 : last.wall + last.dur;
+}
+// Today is a list of segments rather than one file: find which one covers a
+// given time of day, and how far into it that time falls.
+function segmentAt(day, wall) {
+  const segs = day.segments || [];
+  for (let i = 0; i < segs.length; i++) {
+    if (wall >= segs[i].wall && wall < segs[i].wall + segs[i].dur) {
+      return { i, offset: wall - segs[i].wall };
+    }
+  }
+  // asked for a moment nothing was recorded for (the camera was down, or it
+  // is so recent the recorder hasn't flushed it yet): land on the closest
+  // edge we do have instead of leaving the player with nowhere to go
+  let best = null, bestDist = Infinity;
+  for (let i = 0; i < segs.length; i++) {
+    for (const [off, w] of [[0, segs[i].wall], [segs[i].dur, segs[i].wall + segs[i].dur]]) {
+      const dist = Math.abs(wall - w);
+      if (dist < bestDist) { bestDist = dist; best = { i, offset: Math.max(0, off - 0.3) }; }
+    }
+  }
+  return best;
+}
+function nowWall() {
+  const p = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const g = (t) => Number(p.find((x) => x.type === t).value);
+  return g("hour") * 3600 + g("minute") * 60 + g("second");
+}
+// ---------------- the wall ----------------
+// One iframe per camera, living in its tile. The dashboard and a single
+// camera are the same tiles under different CSS, so opening a camera does not
+// touch the iframe at all -- the stream you were already watching just fills
+// the stage. (Rebuilding it, or merely moving it in the DOM, would restart
+// the WHEP negotiation: offer, ICE, wait for a keyframe. That is the black
+// second or two.) What does drop a stream is scheduleRelease(), once you have
+// clearly settled somewhere else.
+function showLive(cam) {
+  for (const tile of wall.children) tile.classList.toggle("active", tile.dataset.cam === cam);
+  fillWall();
+  vpEmpty.hidden = !!mediamtxUrl;
+  if (!mediamtxUrl) vpEmpty.textContent = "Vista en vivo no configurada";
+  playLayer.hidden = true;
+  if (video) video.pause();   // kept around, just not on screen
+}
+
+function showPlayback() {
+  playLayer.hidden = false;
+  vpEmpty.hidden = true;
+}
+
 // ---------------- tabs ----------------
 function buildTabs() {
   const tabs = $("#tabs");
@@ -258,43 +431,85 @@ function showTab(tab) {
     currentCam = null;
     stopLiveClock();
     document.title = "VIGILANTE";
+    document.body.className = "mode-wall";
     $("#single").hidden = true;
-    $("#dashboard").hidden = false;
+    playLayer.hidden = true;
+    vpEmpty.hidden = true;
+    if (video) video.pause();
+    for (const tile of wall.children) tile.classList.remove("active");
+    fillWall();
   } else {
+    document.body.className = "mode-solo";
+    $("#single").hidden = false;
     showCamera(tab);
   }
+  scheduleRelease();
 }
 
-// ---------------- dashboard ----------------
-function buildDashboard() {
-  const grid = $("#dashboard");
-  grid.className = "dashboard n" + cameras.length;
-  grid.innerHTML = "";
+// Watching one camera doesn't need the other tiles decoding behind it, but
+// dropping them the instant you switch would make going back slow again --
+// so off-screen streams get a grace period first.
+const IDLE_RELEASE_MS = 45000;
+let idleTimer = null;
+function scheduleRelease() {
+  clearTimeout(idleTimer);
+  if (!currentCam) return;   // the wall needs all of them
+  idleTimer = setTimeout(() => {
+    for (const tile of wall.children) {
+      if (tile.dataset.cam === currentCam) continue;
+      const f = tile.querySelector("iframe");
+      if (f) f.remove();
+    }
+  }, IDLE_RELEASE_MS);
+}
+
+// ---------------- the tiles ----------------
+function buildWall() {
+  wall.className = "wall n" + cameras.length;
+  wall.innerHTML = "";
   if (!cameras.length) {
-    grid.innerHTML = '<div class="empty">Sin cámaras</div>';
+    vpEmpty.hidden = false;
+    vpEmpty.textContent = "Sin cámaras";
     return;
   }
   cameras.forEach((cam) => {
     const tile = document.createElement("div");
     tile.className = "tile";
-    tile.innerHTML = mediamtxUrl
-      ? `<iframe src="${liveSrc(cam)}" allow="autoplay"></iframe><span class="label"><span class="dot"></span>${cam}</span>`
-      : `<span class="label">${cam}</span>`;
-    tile.onclick = () => showTab(cam);
-    grid.appendChild(tile);
+    tile.dataset.cam = cam;
+    tile.innerHTML = `<span class="label">${mediamtxUrl ? '<span class="dot"></span>' : ""}${cam}</span>`;
+    tile.onclick = () => { if (!currentCam) showTab(cam); };
+    wall.appendChild(tile);
   });
+  fillWall();
 }
 
-// ---------------- live clock (ticks for real while at the live edge) ----------------
+// tiles are built once; their streams come and go with scheduleRelease()
+function fillWall() {
+  if (!mediamtxUrl) return;
+  for (const tile of wall.children) {
+    if (currentCam && tile.dataset.cam !== currentCam) continue;
+    if (tile.querySelector("iframe")) continue;
+    const f = document.createElement("iframe");
+    f.src = liveSrc(tile.dataset.cam);
+    f.allow = "autoplay; fullscreen";
+    f.setAttribute("allowfullscreen", "");
+    tile.prepend(f);
+  }
+}
+
+// ---------------- clock (runs all day today, live or rewound) ----------------
+// The right edge of the slider is *now*, even while watching something older,
+// so dragging right always leads back to live and dragging left always means
+// going back that much real time.
 function startLiveClock() {
   stopLiveClock();
   const tick = () => {
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "America/Argentina/Buenos_Aires",
-      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-    }).formatToParts(new Date());
-    const get = (t) => parts.find((p) => p.type === t).value;
-    clock.textContent = `${get("hour")}:${get("minute")}:${get("second")}`;
+    const now = nowWall();
+    if (activeDay && activeDay.live && !dragging) timeline.max = now;
+    if (atLiveEdge) {
+      clock.textContent = fmtHMS(now);
+      if (!dragging) timeline.value = now;
+    }
   };
   tick();
   liveClockTimer = setInterval(tick, 1000);
@@ -317,88 +532,219 @@ function buildDaySelect() {
 daySelect.addEventListener("change", () => {
   const day = allDays.find((d) => d.date === daySelect.value);
   if (!day) return;
-  if (day.live) enterLiveEdge(day); else enterPlayback(day, 0);
+  if (day.live) enterLiveEdge(day); else enterPlayback(day, dayStartWall(day));
 });
 
 // ---------------- transport (pause, ±10s, speed) ----------------
 function setTransportEnabled(enabled) {
   playBtn.disabled = back10Btn.disabled = fwd10Btn.disabled = speedSelect.disabled = !enabled;
 }
+const ICON_PAUSE =
+  '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="4.5" width="4" height="15" rx="1.3"/>'
+  + '<rect x="13.5" y="4.5" width="4" height="15" rx="1.3"/></svg>';
+const ICON_PLAY =
+  '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.5 4.9v14.2a1 1 0 0 0 1.53.85l11.2-7.1a1 1 0 0 0 0-1.7L9.03 4.05A1 1 0 0 0 7.5 4.9z"/></svg>';
+
 function updatePlayIcon() {
-  playBtn.textContent = video && !video.paused ? "⏸" : "▶";
+  playBtn.innerHTML = video && !video.paused ? ICON_PAUSE : ICON_PLAY;
 }
+updatePlayIcon();
 playBtn.onclick = () => {
   if (!video) return;
   if (video.paused) video.play(); else video.pause();
 };
-back10Btn.onclick = () => { if (video) video.currentTime = Math.max(0, video.currentTime - 10); };
-fwd10Btn.onclick = () => {
-  if (video) video.currentTime = Math.min(video.duration || Infinity, video.currentTime + 10);
-};
+// ±10s move along the *timeline*, not inside the current file, so they step
+// over segment boundaries (and over gaps) like the slider does. Rewinding
+// while live is what drops you out of live in the first place.
+function nudge(delta) {
+  if (!activeDay) return;
+  if (atLiveEdge) { enterPlayback(activeDay, nowWall() + delta); return; }
+  const wall = Math.max(Number(timeline.min),
+                        Math.min(Number(timeline.max), Number(timeline.value) + delta));
+  timeline.value = wall;
+  clock.textContent = fmtHMS(wall);
+  seekWall(wall);
+}
+back10Btn.onclick = () => nudge(-10);
+fwd10Btn.onclick = () => nudge(10);
 speedSelect.addEventListener("change", () => {
   if (video) video.playbackRate = Number(speedSelect.value);
 });
+
+// ---------------- fullscreen ----------------
+// The stage holds whichever of the two is showing (recording or live tile),
+// so fullscreening it covers both. iOS Safari won't do that for arbitrary
+// elements though -- there, only a <video> can go fullscreen, via its own
+// webkit call.
+$("#fs-btn").onclick = () => {
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    return;
+  }
+  const req = stage.requestFullscreen || stage.webkitRequestFullscreen;
+  if (req) {
+    req.call(stage).catch(() => {
+      if (video && video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+    });
+  } else if (video && video.webkitEnterFullscreen) {
+    video.webkitEnterFullscreen();   // iPhone
+  }
+};
+
+// ---------------- the timeline is in time-of-day, not video position -------
+// Driving the slider in wall-clock seconds is what makes "go back a minute"
+// mean a minute of real time: positions are resolved against the recording
+// only at the moment we seek, so a gap in the footage costs a minute of
+// dragging rather than silently shifting everything after it.
+function setTimelineRange(day) {
+  timeline.min = dayStartWall(day);
+  timeline.max = day.live ? nowWall() : dayEndWall(day);
+}
 
 // ---------------- live edge (real mediamtx stream) ----------------
 function enterLiveEdge(day) {
   activeDay = day;
   atLiveEdge = true;
-  video = null;
   liveBtn.classList.add("active");
   liveBtnLabel.textContent = "EN VIVO";
   daySelect.value = day.date;
   setTransportEnabled(false);
-  stopLiveClock();
+  back10Btn.disabled = false;   // rewinding is how you leave the live edge
 
-  viewport.innerHTML = mediamtxUrl
-    ? `<iframe src="${liveSrc(currentCam)}" allow="autoplay"></iframe>`
-    : '<div class="empty">Vista en vivo no configurada</div>';
+  showLive(currentCam);
 
-  const dur = totalDuration(day);
-  timeline.max = dur;
-  timeline.value = dur;
+  setTimelineRange(day);
+  timeline.value = timeline.max;
+  updatePlayIcon();
   startLiveClock();
 }
 
 // ---------------- playback (a specific day, or today rewound) ----------------
-function enterPlayback(day, atSeconds) {
+// Which file backs a given moment is decided here, not by the caller: a past
+// day is one consolidated file, today is whichever segment covers that second.
+function currentWall() {
+  if (!video || !activeDay) return Number(timeline.value);
+  if (activeDay.segments) {
+    const seg = activeDay.segments[curSeg];
+    return seg ? seg.wall + video.currentTime : Number(timeline.value);
+  }
+  return videoToWall(activeDay.breaks, video.currentTime);
+}
+
+function setVideoTime(t) {
+  // seeking before metadata arrives is ignored by the browser, so remember it
+  if (video.readyState >= 1) video.currentTime = t;
+  else pendingSeek = t;
+}
+
+function loadSegment(i, offset) {
+  curSeg = i;
+  pendingSeek = offset;
+  video.src = activeDay.segments[i].url;
+  video.load();
+  video.play().catch(() => {});
+}
+
+function seekWall(wall) {
+  if (!video || !activeDay) return;
+  if (activeDay.segments) {
+    const hit = segmentAt(activeDay, wall);
+    if (!hit) return;
+    if (hit.i !== curSeg) loadSegment(hit.i, hit.offset);
+    else setVideoTime(hit.offset);
+  } else {
+    setVideoTime(wallToVideo(activeDay.breaks, wall));
+  }
+}
+
+// A segment ending isn't the end of the recording, just the end of a file:
+// roll into the next one. Running out of segments means we've caught up with
+// the recorder, so the live stream is the right place to be.
+async function onSegmentEnded() {
+  if (!activeDay || !activeDay.segments || atLiveEdge) return;
+  if (curSeg + 1 >= activeDay.segments.length) await refreshDays();
+  if (activeDay.segments && curSeg + 1 < activeDay.segments.length) {
+    loadSegment(curSeg + 1, 0);
+    return;
+  }
+  // No next file: either we really are at the live edge, or we hit the end of
+  // however much of the growing segment the browser was handed when it asked
+  // for it -- reloading gets the rest. Only once, though: if it ends twice in
+  // the same place there is nothing more coming and live is where to be.
+  const pos = video.currentTime;
+  const seg = activeDay.segments && activeDay.segments[curSeg];
+  const stuck = lastEnded.seg === curSeg && Math.abs(lastEnded.at - pos) < 1;
+  lastEnded = { seg: curSeg, at: pos };
+  if (!stuck && seg && nowWall() - (seg.wall + pos) > 30) {
+    loadSegment(curSeg, Math.max(0, pos - 0.5));
+  } else {
+    enterLiveEdge(activeDay);
+  }
+}
+
+function sameVideo(day) {
+  return video && video.dataset.day === day.date && video.dataset.cam === currentCam;
+}
+
+function ensureVideo(day) {
+  if (sameVideo(day)) return;
+  playLayer.innerHTML = "";
+  video = document.createElement("video");
+  video.dataset.cam = currentCam;
+  video.controls = false;
+  video.playsInline = true;
+  video.autoplay = true;
+  video.playbackRate = Number(speedSelect.value);
+  video.dataset.day = day.date;
+  playLayer.appendChild(video);
+  video.addEventListener("loadedmetadata", () => {
+    const last = !day.segments && day.breaks[day.breaks.length - 1];
+    if (last && last.dur == null && video.duration) {
+      timeline.max = last.wall + video.duration;
+    }
+    if (pendingSeek != null) {
+      video.currentTime = Math.min(pendingSeek, video.duration || pendingSeek);
+      pendingSeek = null;
+    }
+    video.playbackRate = Number(speedSelect.value);
+  });
+  video.addEventListener("timeupdate", () => {
+    const wall = currentWall();
+    if (!dragging) timeline.value = wall;
+    clock.textContent = fmtHMS(wall);
+  });
+  video.addEventListener("ended", onSegmentEnded);
+  video.addEventListener("play", updatePlayIcon);
+  video.addEventListener("pause", updatePlayIcon);
+}
+
+function enterPlayback(day, atWall) {
   activeDay = day;
   atLiveEdge = false;
-  stopLiveClock();
   liveBtn.classList.remove("active");
   liveBtnLabel.textContent = "VOLVER A VIVO";
   daySelect.value = day.date;
   setTransportEnabled(true);
 
-  const dur = totalDuration(day);
-  timeline.max = dur;
-  timeline.value = Math.min(atSeconds, dur);
+  showPlayback();
+  setTimelineRange(day);
+  const wall = Math.max(Number(timeline.min),
+                        Math.min(atWall, Number(timeline.max)));
+  timeline.value = wall;
 
-  const alreadyPlaying = video && video.dataset.day === day.date;
-  if (!alreadyPlaying) {
-    viewport.innerHTML = "";
-    video = document.createElement("video");
-    video.controls = false;
-    video.playsInline = true;
-    video.autoplay = true;
-    video.playbackRate = Number(speedSelect.value);
-    video.dataset.day = day.date;
+  const fresh = !sameVideo(day);
+  ensureVideo(day);
+  if (fresh) curSeg = -1;
+  if (!day.segments && fresh) {
+    pendingSeek = wallToVideo(day.breaks, wall);
     video.src = day.url;
-    viewport.appendChild(video);
-    video.addEventListener("loadedmetadata", () => {
-      video.currentTime = Math.min(atSeconds, video.duration || dur);
-    });
-    video.addEventListener("timeupdate", () => {
-      if (!dragging) timeline.value = video.currentTime;
-      clock.textContent = fmtHMS(videoToWall(activeDay.breaks, video.currentTime));
-    });
-    video.addEventListener("play", updatePlayIcon);
-    video.addEventListener("pause", updatePlayIcon);
   } else {
-    video.currentTime = Math.min(atSeconds, video.duration || dur);
+    seekWall(wall);
   }
+  if (!fresh && video.paused) video.play().catch(() => {});
+  if (day.live) startLiveClock(); else stopLiveClock();
   updatePlayIcon();
-  clock.textContent = fmtHMS(videoToWall(day.breaks, atSeconds));
+  clock.textContent = fmtHMS(wall);
 }
 
 liveBtn.onclick = () => {
@@ -406,51 +752,74 @@ liveBtn.onclick = () => {
   if (today) enterLiveEdge(today);
 };
 
-// dragging the slider left while at the live edge drops into playback, right
-// back to the edge snaps back to the real live stream
+// dragging left off the live edge drops into playback at that time of day;
+// dragging back to the edge returns to the real live stream
 timeline.addEventListener("input", () => {
   if (!activeDay) return;
   dragging = true;
-  const v = Number(timeline.value);
-  clock.textContent = fmtHMS(videoToWall(activeDay.breaks, v));
-  if (atLiveEdge && v < timeline.max - 1) {
-    enterPlayback(activeDay, v);
+  const wall = Number(timeline.value);
+  clock.textContent = fmtHMS(wall);
+  if (atLiveEdge && wall < Number(timeline.max) - 2) {
+    enterPlayback(activeDay, wall);
+    dragging = true;  // enterPlayback repoints the slider; stay in the drag
   }
 });
 timeline.addEventListener("change", () => {
-  const v = Number(timeline.value);
-  if (activeDay && activeDay.live && v >= timeline.max - 1) {
-    enterLiveEdge(activeDay);
-  } else if (video) {
-    video.currentTime = v;
-  }
+  const wall = Number(timeline.value);
   dragging = false;
+  if (!activeDay) return;
+  if (activeDay.live && wall >= nowWall() - 5) enterLiveEdge(activeDay);
+  else seekWall(wall);
 });
 
 // ---------------- per-camera bootstrap ----------------
-async function refreshDays() {
-  const { days } = await fetch(`/api/cameras/${currentCam}/days`).then((r) => r.json());
+// Adopting a fresh listing must not disturb what is playing: same day, more
+// segments. `activeDay` is repointed so the newest footage becomes reachable.
+function adoptDays(days) {
   allDays = days;
   buildDaySelect();
+  if (!activeDay) return;
+  const match = days.find((d) => d.date === activeDay.date);
+  if (match) activeDay = match;
+}
+
+async function refreshDays(cam = currentCam) {
+  const { days } = await fetch(`/api/cameras/${cam}/days`).then((r) => r.json());
+  daysCache[cam] = days;
+  if (cam === currentCam) adoptDays(days);
   return days;
+}
+
+function openDays(days) {
+  const today = days.find((d) => d.live);
+  if (today) enterLiveEdge(today);
+  else if (days.length) enterPlayback(days[0], dayStartWall(days[0]));
+  else {
+    // nothing recorded yet is no reason to hide the live picture
+    activeDay = null; atLiveEdge = false;
+    showLive(currentCam);
+    timeline.max = 0; timeline.value = 0;
+    clock.textContent = "--:--:--";
+    setTransportEnabled(false);
+  }
 }
 
 async function showCamera(cam) {
   currentCam = cam;
   document.title = `VIGILANTE — ${cam}`;
-  $("#dashboard").hidden = true;
-  $("#single").hidden = false;
-
-  const days = await refreshDays();
-  const today = days.find((d) => d.live);
-  if (today) enterLiveEdge(today);
-  else if (days.length) enterPlayback(days[0], 0);
-  else {
-    activeDay = null; atLiveEdge = false; video = null;
-    viewport.innerHTML = '<div class="empty">Sin grabaciones todavía para esta cámara</div>';
-    timeline.max = 0; timeline.value = 0;
-    clock.textContent = "--:--:--";
-    setTransportEnabled(false);
+  // put the picture up first and sort the timeline out after: the day listing
+  // has to probe the segment still being written, and there is no reason to
+  // stare at an empty box while that happens
+  showLive(cam);
+  if (daysCache[cam]) {
+    allDays = daysCache[cam];
+    buildDaySelect();
+    openDays(allDays);
+    refreshDays(cam);
+  } else {
+    const days = await refreshDays(cam);
+    if (cam !== currentCam) return;   // tabbed away while we waited
+    openDays(days);
   }
 }
 
@@ -462,25 +831,20 @@ async function init() {
   cameras = cams;
   mediamtxUrl = cfg.mediamtx_url;
   buildTabs();
-  buildDashboard();
+  buildWall();
   showTab("dashboard");
+  // warm both caches -- ours and the server's segment-duration memo -- while
+  // the dashboard is what's on screen, so the first camera tab opens cold
+  // exactly never
+  cameras.forEach((cam) => refreshDays(cam).catch(() => {}));
 }
 init();
 
-// keep today's data fresh so the live edge keeps extending, without
-// disturbing whatever is currently on screen
-setInterval(async () => {
-  if (!currentCam) return;
-  const days = await refreshDays();
-  const today = days.find((d) => d.live);
-  if (today && atLiveEdge) {
-    activeDay = today;
-    timeline.max = totalDuration(today);
-    timeline.value = timeline.max;
-  } else if (activeDay) {
-    const match = days.find((d) => d.date === activeDay.date);
-    if (match) activeDay = match;
-  }
+// pick up segments recorded since the page loaded, without disturbing what is
+// on screen. (The live edge itself is advanced every second by the clock, not
+// here -- it tracks real time, not how much has been written to disk.)
+setInterval(() => {
+  if (currentCam) refreshDays().catch(() => {});
 }, 45000);
 </script>
 </body>
