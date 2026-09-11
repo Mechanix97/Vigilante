@@ -19,47 +19,64 @@
     padding: 14px 18px; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .03em; }
-  .cams, .modes { display: flex; gap: 6px; flex-wrap: wrap; }
-  .modes { margin-left: auto; }
-  .cams button, .modes button {
+  header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .06em; }
+  header button {
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit;
   }
-  .cams button.active, .modes button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
   .live-dot {
     display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     background: var(--live); margin-right: 6px; vertical-align: 1px;
     animation: pulse 1.6s ease-in-out infinite;
   }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
-  main {
-    display: grid; grid-template-columns: 1fr; gap: 16px; padding: 16px;
-    max-width: 1100px; margin: 0 auto;
-  }
-  @media (min-width: 900px) {
-    main.recordings { grid-template-columns: 2fr 1fr; align-items: start; }
-  }
-  .player, .live-frame {
-    background: #000; border-radius: 8px; overflow: hidden;
-    aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
-  }
-  video, .live-frame iframe { width: 100%; height: 100%; display: block; border: 0; }
-  .placeholder { color: var(--muted); font-size: 13px; }
-  .live-grid {
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+  [hidden] { display: none !important; }
+
+  /* --- dashboard: all cameras, big --- */
+  .dashboard {
     display: grid; grid-template-columns: 1fr; gap: 16px;
   }
   @media (min-width: 700px) {
-    .live-grid.n2 { grid-template-columns: 1fr 1fr; }
+    .dashboard.n2 { grid-template-columns: 1fr 1fr; }
+    .dashboard.n3, .dashboard.n4 { grid-template-columns: 1fr 1fr; }
   }
-  .live-cam { display: flex; flex-direction: column; gap: 6px; }
-  .live-cam h3 {
-    margin: 0; font-size: 13px; color: var(--muted); font-weight: 600;
-    text-transform: capitalize;
+  .tile {
+    background: #000; border-radius: 10px; overflow: hidden; cursor: pointer;
+    aspect-ratio: 16/9; position: relative; border: 1px solid var(--border);
   }
+  .tile iframe { width: 100%; height: 100%; border: 0; pointer-events: none; }
+  .tile .label {
+    position: absolute; left: 10px; top: 10px; padding: 4px 10px;
+    background: rgba(0,0,0,.55); border-radius: 5px; font-weight: 600;
+    text-transform: capitalize; backdrop-filter: blur(2px);
+  }
+
+  /* --- single camera: live + recordings, one screen --- */
+  .single-live {
+    background: #000; border-radius: 10px; overflow: hidden;
+    aspect-ratio: 21/9; max-height: 60vh;
+  }
+  .single-live iframe { width: 100%; height: 100%; border: 0; }
+  .cam-title {
+    margin: 16px 0 10px; font-size: 15px; font-weight: 700;
+    text-transform: capitalize; display: flex; align-items: center; gap: 8px;
+  }
+  .rec-area {
+    display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 16px;
+  }
+  @media (min-width: 900px) {
+    .rec-area { grid-template-columns: 2fr 1fr; align-items: start; }
+  }
+  .player {
+    background: #000; border-radius: 8px; overflow: hidden;
+    aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
+  }
+  video { width: 100%; height: 100%; display: block; }
+  .placeholder { color: var(--muted); font-size: 13px; text-align: center; padding: 0 20px; }
   .panel {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px; max-height: 70vh; overflow-y: auto;
+    padding: 12px; max-height: 50vh; overflow-y: auto;
   }
   .panel h2 {
     font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
@@ -77,36 +94,33 @@
   li .size { color: var(--muted); font-variant-numeric: tabular-nums; }
   li button.playing .size { color: #dbe6ff; }
   .empty { color: var(--muted); padding: 8px 6px; }
-  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <header>
-  <h1>🕵️ VIGILANTE</h1>
-  <div class="cams" id="cams" hidden></div>
-  <div class="modes">
-    <button id="mode-live" class="active"><span class="live-dot"></span>Vivo</button>
-    <button id="mode-rec">Grabaciones</button>
-  </div>
+  <h1>VIGILANTE</h1>
+  <button id="back" hidden>← Todas las cámaras</button>
 </header>
 
-<main id="live-view">
-  <div class="live-grid" id="live-grid"></div>
-</main>
+<main id="dashboard" class="dashboard"></main>
 
-<main id="rec-view" class="recordings" hidden>
-  <div class="player">
-    <video id="video" controls playsinline></video>
-    <div class="placeholder" id="placeholder">Elegí un video de la derecha</div>
-  </div>
-  <div>
-    <div class="panel">
-      <h2>Hoy (segmentos sin consolidar)</h2>
-      <ul id="today"><li class="empty">-</li></ul>
+<main id="single" hidden>
+  <div class="single-live" id="single-live"></div>
+  <div class="cam-title"><span class="live-dot"></span><span id="cam-name"></span></div>
+  <div class="rec-area">
+    <div class="player">
+      <video id="video" controls playsinline></video>
+      <div class="placeholder" id="placeholder">Elegí una grabación de la derecha para verla acá</div>
     </div>
-    <div class="panel">
-      <h2>Días anteriores</h2>
-      <ul id="days"><li class="empty">-</li></ul>
+    <div>
+      <div class="panel">
+        <h2>Hoy (segmentos sin consolidar)</h2>
+        <ul id="today"><li class="empty">-</li></ul>
+      </div>
+      <div class="panel">
+        <h2>Días anteriores</h2>
+        <ul id="days"><li class="empty">-</li></ul>
+      </div>
     </div>
   </div>
 </main>
@@ -126,39 +140,58 @@ function fmtTime(hhmmss) {
 function fmtDate(yyyymmdd) {
   return `${yyyymmdd.slice(6, 8)}/${yyyymmdd.slice(4, 6)}/${yyyymmdd.slice(0, 4)}`;
 }
-
-// --- mode switch (vivo / grabaciones) ---
-function setMode(mode) {
-  const live = mode === "live";
-  $("#mode-live").classList.toggle("active", live);
-  $("#mode-rec").classList.toggle("active", !live);
-  $("#live-view").hidden = !live;
-  $("#rec-view").hidden = live;
-  $("#cams").hidden = live; // the camera picker only matters for recordings
-  if (!live && currentCam) loadRecordings(currentCam);
+function liveSrc(cam) {
+  return `${mediamtxUrl}/${cam}/`;
 }
-$("#mode-live").onclick = () => setMode("live");
-$("#mode-rec").onclick = () => setMode("rec");
 
-function buildLiveGrid() {
-  const grid = $("#live-grid");
-  grid.className = "live-grid" + (cameras.length === 2 ? " n2" : "");
+// --- dashboard: every camera, live, big ---
+function buildDashboard() {
+  const grid = $("#dashboard");
+  grid.className = "dashboard n" + cameras.length;
   grid.innerHTML = "";
-  if (!mediamtxUrl) {
-    grid.innerHTML = '<div class="placeholder">Vista en vivo no configurada (falta MEDIAMTX_URL)</div>';
+  if (!cameras.length) {
+    grid.innerHTML = '<div class="placeholder">Sin cámaras</div>';
     return;
   }
   cameras.forEach((cam) => {
-    const wrap = document.createElement("div");
-    wrap.className = "live-cam";
-    wrap.innerHTML = `
-      <h3>${cam}</h3>
-      <div class="live-frame"><iframe src="${mediamtxUrl}/${cam}/" allow="autoplay"></iframe></div>`;
-    grid.appendChild(wrap);
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    tile.innerHTML = mediamtxUrl
+      ? `<iframe src="${liveSrc(cam)}" allow="autoplay"></iframe><span class="label">${cam}</span>`
+      : `<span class="label">${cam}</span>`;
+    tile.onclick = () => openCamera(cam);
+    grid.appendChild(tile);
   });
 }
 
-// --- recordings ---
+// --- single camera: its own live view + recordings, same screen ---
+function openCamera(cam) {
+  currentCam = cam;
+  activeBtn = null; activeUrl = null;
+  video.removeAttribute("src");
+  video.style.display = "none";
+  placeholder.style.display = "block";
+
+  $("#dashboard").hidden = true;
+  $("#single").hidden = false;
+  $("#back").hidden = false;
+  $("#cam-name").textContent = cam;
+  $("#single-live").innerHTML = mediamtxUrl
+    ? `<iframe src="${liveSrc(cam)}" allow="autoplay"></iframe>` : "";
+  document.title = `VIGILANTE — ${cam}`;
+  loadRecordings(cam);
+}
+
+function closeCamera() {
+  currentCam = null;
+  $("#single-live").innerHTML = "";
+  $("#single").hidden = true;
+  $("#dashboard").hidden = false;
+  $("#back").hidden = true;
+  document.title = "VIGILANTE";
+}
+$("#back").onclick = closeCamera;
+
 function play(url, label, btn) {
   if (activeUrl !== url) {
     video.src = url;
@@ -169,14 +202,9 @@ function play(url, label, btn) {
   video.style.display = "block";
   if (activeBtn) activeBtn.classList.remove("playing");
   if (btn) { btn.classList.add("playing"); activeBtn = btn; }
-  document.title = `VIGILANTE — ${label}`;
 }
 
 async function loadRecordings(cam) {
-  currentCam = cam;
-  document.querySelectorAll(".cams button").forEach(
-    (b) => b.classList.toggle("active", b.dataset.cam === cam));
-
   const [today, days] = await Promise.all([
     fetch(`/api/cameras/${cam}/today`).then((r) => r.json()),
     fetch(`/api/cameras/${cam}/days`).then((r) => r.json()),
@@ -192,7 +220,6 @@ async function loadRecordings(cam) {
       const btn = document.createElement("button");
       btn.innerHTML = `<span>${fmtTime(s.time)}</span><span class="size">${fmtSize(s.size)}</span>`;
       btn.onclick = () => play(s.url, `${cam} ${fmtTime(s.time)}`, btn);
-      if (s.url === activeUrl) { btn.classList.add("playing"); activeBtn = btn; }
       li.appendChild(btn);
       todayUl.appendChild(li);
     });
@@ -208,7 +235,6 @@ async function loadRecordings(cam) {
       const btn = document.createElement("button");
       btn.innerHTML = `<span>${fmtDate(d.date)}</span><span class="size">${fmtSize(d.size)}</span>`;
       btn.onclick = () => play(d.url, `${cam} ${fmtDate(d.date)}`, btn);
-      if (d.url === activeUrl) { btn.classList.add("playing"); activeBtn = btn; }
       li.appendChild(btn);
       daysUl.appendChild(li);
     });
@@ -222,26 +248,14 @@ async function init() {
   ]);
   cameras = cams;
   mediamtxUrl = cfg.mediamtx_url;
-
-  const camsDiv = $("#cams");
-  cameras.forEach((cam, i) => {
-    const b = document.createElement("button");
-    b.textContent = cam;
-    b.dataset.cam = cam;
-    b.onclick = () => loadRecordings(cam);
-    camsDiv.appendChild(b);
-    if (i === 0) currentCam = cam;
-  });
-  if (!cameras.length) {
-    camsDiv.innerHTML = '<span style="color:var(--muted)">sin cámaras</span>';
-  }
-  buildLiveGrid();
+  buildDashboard();
 }
 init();
 
-// refresh the recordings lists periodically so new segments show up without a reload
+// keep the current camera's recordings list fresh, and the dashboard's
+// selection state, without a manual reload
 setInterval(() => {
-  if (currentCam && !$("#rec-view").hidden) loadRecordings(currentCam);
+  if (currentCam) loadRecordings(currentCam);
 }, 30000);
 </script>
 </body>
