@@ -1,0 +1,17 @@
+services:
+  aidot-viewer:
+    build: .
+    image: aidot-viewer:latest
+    container_name: aidot-viewer
+    user: "1000:1000"
+    ports:
+      - "8090:8090"
+    environment:
+      - DAILY_DIR=/daily
+      - RECORD_DIR=/rec
+      - TZ_OFFSET_HOURS=-3
+    volumes:
+      # read-only: this app never writes into aidot-webrtc's output
+      - /mnt/hdd/aidot-daily:/daily:ro
+      - /mnt/hdd/aidot:/rec:ro
+    restart: unless-stopped

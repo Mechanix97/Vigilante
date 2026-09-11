@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aidot-viewer</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a;
+    --text: #e6e8eb; --muted: #8b92a0; --accent: #4f8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .cams { display: flex; gap: 6px; flex-wrap: wrap; }
+  .cams button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit;
+  }
+  .cams button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main {
+    display: grid; grid-template-columns: 1fr; gap: 16px; padding: 16px;
+    max-width: 1100px; margin: 0 auto;
+  }
+  @media (min-width: 900px) {
+    main { grid-template-columns: 2fr 1fr; align-items: start; }
+  }
+  .player {
+    background: #000; border-radius: 8px; overflow: hidden;
+    aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
+  }
+  video { width: 100%; height: 100%; display: block; }
+  .placeholder { color: var(--muted); font-size: 13px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; max-height: 70vh; overflow-y: auto;
+  }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); margin: 0 0 8px;
+  }
+  .panel + .panel { margin-top: 16px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li button {
+    width: 100%; text-align: left; background: none; border: none; color: var(--text);
+    padding: 8px 6px; border-radius: 6px; cursor: pointer; font: inherit;
+    display: flex; justify-content: space-between; gap: 8px;
+  }
+  li button:hover { background: #232834; }
+  li button.playing { background: var(--accent); color: #fff; }
+  li .size { color: var(--muted); font-variant-numeric: tabular-nums; }
+  li button.playing .size { color: #dbe6ff; }
+  .empty { color: var(--muted); padding: 8px 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>aidot-viewer</h1>
+  <div class="cams" id="cams"></div>
+</header>
+<main>
+  <div class="player">
+    <video id="video" controls playsinline></video>
+    <div class="placeholder" id="placeholder">Elegí una cámara y un video de la derecha</div>
+  </div>
+  <div>
+    <div class="panel">
+      <h2>Hoy (segmentos en vivo)</h2>
+      <ul id="today"><li class="empty">-</li></ul>
+    </div>
+    <div class="panel">
+      <h2>Días anteriores</h2>
+      <ul id="days"><li class="empty">-</li></ul>
+    </div>
+  </div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const video = $("#video"), placeholder = $("#placeholder");
+let currentCam = null, activeBtn = null, activeUrl = null;
+
+function fmtSize(bytes) {
+  const mb = bytes / 1e6;
+  return mb >= 1000 ? (mb / 1000).toFixed(1) + " GB" : mb.toFixed(0) + " MB";
+}
+function fmtTime(hhmmss) {
+  return hhmmss.slice(0, 2) + ":" + hhmmss.slice(2, 4) + ":" + hhmmss.slice(4, 6);
+}
+function fmtDate(yyyymmdd) {
+  return `${yyyymmdd.slice(6, 8)}/${yyyymmdd.slice(4, 6)}/${yyyymmdd.slice(0, 4)}`;
+}
+
+function play(url, label, btn) {
+  if (activeUrl !== url) {
+    video.src = url;
+    video.play().catch(() => {});
+    activeUrl = url;
+  }
+  placeholder.style.display = "none";
+  video.style.display = "block";
+  if (activeBtn) activeBtn.classList.remove("playing");
+  if (btn) { btn.classList.add("playing"); activeBtn = btn; }
+  document.title = `aidot-viewer — ${label}`;
+}
+
+async function loadCamera(cam) {
+  currentCam = cam;
+  document.querySelectorAll(".cams button").forEach(
+    (b) => b.classList.toggle("active", b.dataset.cam === cam));
+
+  const [today, days] = await Promise.all([
+    fetch(`/api/cameras/${cam}/today`).then((r) => r.json()),
+    fetch(`/api/cameras/${cam}/days`).then((r) => r.json()),
+  ]);
+
+  const todayUl = $("#today");
+  todayUl.innerHTML = "";
+  if (!today.segments.length) {
+    todayUl.innerHTML = '<li class="empty">sin segmentos todavía</li>';
+  } else {
+    // most recent first, but keep chronological playback via the list order
+    [...today.segments].reverse().forEach((s) => {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.innerHTML = `<span>${fmtTime(s.time)}</span><span class="size">${fmtSize(s.size)}</span>`;
+      btn.onclick = () => play(s.url, `${cam} ${fmtTime(s.time)}`, btn);
+      if (s.url === activeUrl) { btn.classList.add("playing"); activeBtn = btn; }
+      li.appendChild(btn);
+      todayUl.appendChild(li);
+    });
+  }
+
+  const daysUl = $("#days");
+  daysUl.innerHTML = "";
+  if (!days.days.length) {
+    daysUl.innerHTML = '<li class="empty">sin días consolidados todavía</li>';
+  } else {
+    days.days.forEach((d) => {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.innerHTML = `<span>${fmtDate(d.date)}</span><span class="size">${fmtSize(d.size)}</span>`;
+      btn.onclick = () => play(d.url, `${cam} ${fmtDate(d.date)}`, btn);
+      if (d.url === activeUrl) { btn.classList.add("playing"); activeBtn = btn; }
+      li.appendChild(btn);
+      daysUl.appendChild(li);
+    });
+  }
+}
+
+async function init() {
+  const { cameras } = await fetch("/api/cameras").then((r) => r.json());
+  const camsDiv = $("#cams");
+  cameras.forEach((cam, i) => {
+    const b = document.createElement("button");
+    b.textContent = cam;
+    b.dataset.cam = cam;
+    b.onclick = () => loadCamera(cam);
+    camsDiv.appendChild(b);
+    if (i === 0) loadCamera(cam);
+  });
+  if (!cameras.length) {
+    camsDiv.innerHTML = '<span style="color:var(--muted)">sin cámaras</span>';
+  }
+}
+init();
+
+// refresh the "today" list periodically so new segments show up without a reload
+setInterval(() => { if (currentCam) loadCamera(currentCam); }, 30000);
+</script>
+</body>
+</html>
