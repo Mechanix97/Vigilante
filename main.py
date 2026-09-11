@@ -22,13 +22,17 @@ from fastapi.staticfiles import StaticFiles
 DAILY_DIR = os.environ.get("DAILY_DIR", "/daily")
 RECORD_DIR = os.environ.get("RECORD_DIR", "/rec")
 TZ = timezone(timedelta(hours=int(os.environ.get("TZ_OFFSET_HOURS", "-3"))))
+# base URL for mediamtx's built-in WHEP player page, one per camera at
+# <MEDIAMTX_URL>/<camera>/ -- must be reachable from the viewer's browser,
+# not just from inside this container, so it can't default to 127.0.0.1.
+MEDIAMTX_URL = os.environ.get("MEDIAMTX_URL", "")
 
 DAY_RE = re.compile(r"^(\d{8})\.mp4$")
 SEG_RE = re.compile(r"^(\d{8})-(\d{6})\.mp4$")
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 CHUNK = 1024 * 1024
 
-app = FastAPI(title="aidot-viewer")
+app = FastAPI(title="VIGILANTE")
 
 
 def _cameras():
@@ -49,6 +53,11 @@ def _safe_cam(cam):
 @app.get("/api/cameras")
 def cameras():
     return {"cameras": _cameras()}
+
+
+@app.get("/api/config")
+def config():
+    return {"mediamtx_url": MEDIAMTX_URL, "live_enabled": bool(MEDIAMTX_URL)}
 
 
 @app.get("/api/cameras/{cam}/days")

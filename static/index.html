@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aidot-viewer</title>
+<title>VIGILANTE</title>
 <style>
   :root {
     color-scheme: light dark;
     --bg: #0f1115; --panel: #171a21; --border: #2a2f3a;
-    --text: #e6e8eb; --muted: #8b92a0; --accent: #4f8cff;
+    --text: #e6e8eb; --muted: #8b92a0; --accent: #4f8cff; --live: #e5484d;
   }
   * { box-sizing: border-box; }
   body {
@@ -19,26 +19,44 @@
     padding: 14px 18px; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  .cams { display: flex; gap: 6px; flex-wrap: wrap; }
-  .cams button {
+  header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .03em; }
+  .cams, .modes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .modes { margin-left: auto; }
+  .cams button, .modes button {
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit;
   }
-  .cams button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .cams button.active, .modes button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .live-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--live); margin-right: 6px; vertical-align: 1px;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   main {
     display: grid; grid-template-columns: 1fr; gap: 16px; padding: 16px;
     max-width: 1100px; margin: 0 auto;
   }
   @media (min-width: 900px) {
-    main { grid-template-columns: 2fr 1fr; align-items: start; }
+    main.recordings { grid-template-columns: 2fr 1fr; align-items: start; }
   }
-  .player {
+  .player, .live-frame {
     background: #000; border-radius: 8px; overflow: hidden;
     aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
   }
-  video { width: 100%; height: 100%; display: block; }
+  video, .live-frame iframe { width: 100%; height: 100%; display: block; border: 0; }
   .placeholder { color: var(--muted); font-size: 13px; }
+  .live-grid {
+    display: grid; grid-template-columns: 1fr; gap: 16px;
+  }
+  @media (min-width: 700px) {
+    .live-grid.n2 { grid-template-columns: 1fr 1fr; }
+  }
+  .live-cam { display: flex; flex-direction: column; gap: 6px; }
+  .live-cam h3 {
+    margin: 0; font-size: 13px; color: var(--muted); font-weight: 600;
+    text-transform: capitalize;
+  }
   .panel {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     padding: 12px; max-height: 70vh; overflow-y: auto;
@@ -59,21 +77,31 @@
   li .size { color: var(--muted); font-variant-numeric: tabular-nums; }
   li button.playing .size { color: #dbe6ff; }
   .empty { color: var(--muted); padding: 8px 6px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <header>
-  <h1>aidot-viewer</h1>
-  <div class="cams" id="cams"></div>
+  <h1>🕵️ VIGILANTE</h1>
+  <div class="cams" id="cams" hidden></div>
+  <div class="modes">
+    <button id="mode-live" class="active"><span class="live-dot"></span>Vivo</button>
+    <button id="mode-rec">Grabaciones</button>
+  </div>
 </header>
-<main>
+
+<main id="live-view">
+  <div class="live-grid" id="live-grid"></div>
+</main>
+
+<main id="rec-view" class="recordings" hidden>
   <div class="player">
     <video id="video" controls playsinline></video>
-    <div class="placeholder" id="placeholder">Elegí una cámara y un video de la derecha</div>
+    <div class="placeholder" id="placeholder">Elegí un video de la derecha</div>
   </div>
   <div>
     <div class="panel">
-      <h2>Hoy (segmentos en vivo)</h2>
+      <h2>Hoy (segmentos sin consolidar)</h2>
       <ul id="today"><li class="empty">-</li></ul>
     </div>
     <div class="panel">
@@ -82,10 +110,11 @@
     </div>
   </div>
 </main>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const video = $("#video"), placeholder = $("#placeholder");
-let currentCam = null, activeBtn = null, activeUrl = null;
+let cameras = [], mediamtxUrl = "", currentCam = null, activeBtn = null, activeUrl = null;
 
 function fmtSize(bytes) {
   const mb = bytes / 1e6;
@@ -98,6 +127,38 @@ function fmtDate(yyyymmdd) {
   return `${yyyymmdd.slice(6, 8)}/${yyyymmdd.slice(4, 6)}/${yyyymmdd.slice(0, 4)}`;
 }
 
+// --- mode switch (vivo / grabaciones) ---
+function setMode(mode) {
+  const live = mode === "live";
+  $("#mode-live").classList.toggle("active", live);
+  $("#mode-rec").classList.toggle("active", !live);
+  $("#live-view").hidden = !live;
+  $("#rec-view").hidden = live;
+  $("#cams").hidden = live; // the camera picker only matters for recordings
+  if (!live && currentCam) loadRecordings(currentCam);
+}
+$("#mode-live").onclick = () => setMode("live");
+$("#mode-rec").onclick = () => setMode("rec");
+
+function buildLiveGrid() {
+  const grid = $("#live-grid");
+  grid.className = "live-grid" + (cameras.length === 2 ? " n2" : "");
+  grid.innerHTML = "";
+  if (!mediamtxUrl) {
+    grid.innerHTML = '<div class="placeholder">Vista en vivo no configurada (falta MEDIAMTX_URL)</div>';
+    return;
+  }
+  cameras.forEach((cam) => {
+    const wrap = document.createElement("div");
+    wrap.className = "live-cam";
+    wrap.innerHTML = `
+      <h3>${cam}</h3>
+      <div class="live-frame"><iframe src="${mediamtxUrl}/${cam}/" allow="autoplay"></iframe></div>`;
+    grid.appendChild(wrap);
+  });
+}
+
+// --- recordings ---
 function play(url, label, btn) {
   if (activeUrl !== url) {
     video.src = url;
@@ -108,10 +169,10 @@ function play(url, label, btn) {
   video.style.display = "block";
   if (activeBtn) activeBtn.classList.remove("playing");
   if (btn) { btn.classList.add("playing"); activeBtn = btn; }
-  document.title = `aidot-viewer — ${label}`;
+  document.title = `VIGILANTE — ${label}`;
 }
 
-async function loadCamera(cam) {
+async function loadRecordings(cam) {
   currentCam = cam;
   document.querySelectorAll(".cams button").forEach(
     (b) => b.classList.toggle("active", b.dataset.cam === cam));
@@ -126,7 +187,6 @@ async function loadCamera(cam) {
   if (!today.segments.length) {
     todayUl.innerHTML = '<li class="empty">sin segmentos todavía</li>';
   } else {
-    // most recent first, but keep chronological playback via the list order
     [...today.segments].reverse().forEach((s) => {
       const li = document.createElement("li");
       const btn = document.createElement("button");
@@ -156,24 +216,33 @@ async function loadCamera(cam) {
 }
 
 async function init() {
-  const { cameras } = await fetch("/api/cameras").then((r) => r.json());
+  const [{ cameras: cams }, cfg] = await Promise.all([
+    fetch("/api/cameras").then((r) => r.json()),
+    fetch("/api/config").then((r) => r.json()),
+  ]);
+  cameras = cams;
+  mediamtxUrl = cfg.mediamtx_url;
+
   const camsDiv = $("#cams");
   cameras.forEach((cam, i) => {
     const b = document.createElement("button");
     b.textContent = cam;
     b.dataset.cam = cam;
-    b.onclick = () => loadCamera(cam);
+    b.onclick = () => loadRecordings(cam);
     camsDiv.appendChild(b);
-    if (i === 0) loadCamera(cam);
+    if (i === 0) currentCam = cam;
   });
   if (!cameras.length) {
     camsDiv.innerHTML = '<span style="color:var(--muted)">sin cámaras</span>';
   }
+  buildLiveGrid();
 }
 init();
 
-// refresh the "today" list periodically so new segments show up without a reload
-setInterval(() => { if (currentCam) loadCamera(currentCam); }, 30000);
+// refresh the recordings lists periodically so new segments show up without a reload
+setInterval(() => {
+  if (currentCam && !$("#rec-view").hidden) loadRecordings(currentCam);
+}, 30000);
 </script>
 </body>
 </html>

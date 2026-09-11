@@ -24,4 +24,4 @@ jobs:
           ruff check .
 
       - name: Docker build
-        run: docker build -t aidot-viewer:ci .
+        run: docker build -t vigilante:ci .

@@ -1,8 +1,8 @@
 services:
-  aidot-viewer:
+  vigilante:
     build: .
-    image: aidot-viewer:latest
-    container_name: aidot-viewer
+    image: vigilante:latest
+    container_name: vigilante
     user: "1000:1000"
     ports:
       - "8090:8090"
@@ -10,6 +10,9 @@ services:
       - DAILY_DIR=/daily
       - RECORD_DIR=/rec
       - TZ_OFFSET_HOURS=-3
+      # reachable from the *browser*, not just this container -- point it at
+      # whatever hostname/IP mediamtx's :8889 is published on (Tailscale/LAN)
+      - MEDIAMTX_URL=http://homelab:8889
     volumes:
       # read-only: this app never writes into aidot-webrtc's output
       - /mnt/hdd/aidot-daily:/daily:ro
