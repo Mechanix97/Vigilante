@@ -105,6 +105,12 @@ def _probe_duration(path, cache=True):
     return dur
 
 
+def _apart(a, b):
+    """Seconds between two times of day, the short way around midnight."""
+    d = abs(a - b) % 86400
+    return min(d, 86400 - d)
+
+
 def _build_breaks(camdir, segnames, durs):
     """Map positions in a concatenation of `segnames` to wall-clock time.
 
@@ -132,10 +138,16 @@ def _build_breaks(camdir, segnames, durs):
                 sess = json.load(fh)
         except (OSError, ValueError):
             continue
+        tz = sess.get("tz_offset", 0)
+        if sess.get("starts"):
+            # newer recorders write each segment's own epoch, which a deletion
+            # elsewhere in the session cannot shift
+            for name, epoch in sess["starts"].items():
+                starts[name] = (epoch + tz) % 86400
+            continue
         offset = 0.0
         for name in sess.get("segments", []):
-            starts[name] = (sess["start_epoch"] + offset
-                            + sess.get("tz_offset", 0)) % 86400
+            starts[name] = (sess["start_epoch"] + offset + tz) % 86400
             if name not in durs:
                 durs[name] = _probe_duration(os.path.join(camdir, name))
             offset += durs[name]
@@ -143,9 +155,16 @@ def _build_breaks(camdir, segnames, durs):
     breaks, cum = [], 0.0
     for name in segnames:
         wall = starts.get(name)
-        if wall is None:  # pre-index recording: fall back to the filename
-            hhmmss = name[9:15]
-            wall = _hhmmss_to_seconds(hhmmss)
+        stamp = _hhmmss_to_seconds(name[9:15])
+        # The filename stamp lags the first frame by however long the encoder
+        # buffered (~12s here), so the index is the better anchor -- but only
+        # while it still describes reality. An index whose segment list was
+        # rebuilt after the nightly consolidation deleted that session's older
+        # files re-anchors the survivors to the session's start, which can be
+        # most of a day off. The stamp is never wildly wrong, so it is the
+        # referee: disagree with it by minutes and the index has gone stale.
+        if wall is None or _apart(wall, stamp) > 300:
+            wall = stamp
         d = durs.get(name) or _probe_duration(os.path.join(camdir, name))
         durs[name] = d
         breaks.append({"cum": round(cum, 2), "wall": round(wall, 2), "dur": round(d, 2)})

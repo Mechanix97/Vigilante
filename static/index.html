@@ -190,6 +190,23 @@
     width: 16px; height: 16px; border-radius: 50%; background: var(--accent);
     border: 3px solid #fff2; cursor: pointer; box-shadow: 0 0 0 4px var(--accent-dim);
   }
+  .timeline-wrap { position: relative; }
+  /* follows the thumb, so the time you are scrubbing to is right under your
+     finger instead of somewhere else on the page */
+  .scrub-bubble {
+    position: absolute; bottom: calc(100% + 10px); transform: translateX(-50%);
+    background: var(--accent); color: #fff; font-weight: 700; font-size: 14px;
+    padding: 5px 10px; border-radius: 8px; white-space: nowrap; pointer-events: none;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45); z-index: 2;
+  }
+  .scrub-bubble::after {
+    content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: var(--accent);
+  }
+  .timeline-ends {
+    display: flex; justify-content: space-between; margin-top: 6px;
+    font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
+  }
   .scrub-clock {
     margin-top: 12px; text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .03em;
   }
@@ -221,6 +238,8 @@
     input[type="range"].timeline { height: 10px; }
     input[type="range"].timeline::-webkit-slider-thumb { width: 24px; height: 24px; }
     input[type="range"].timeline::-moz-range-thumb { width: 24px; height: 24px; }
+    .scrub-bubble { font-size: 15px; padding: 6px 12px; }
+    .timeline-ends { font-size: 12px; }
     .scrub-clock { font-size: 30px; }
     /* stack the wall on phones so each camera is still worth looking at */
     body.mode-wall .wall.n2, body.mode-wall .wall.n3, body.mode-wall .wall.n4 { grid-template-columns: 1fr; }
@@ -289,7 +308,11 @@
         </button>
       </div>
     </div>
-    <input type="range" class="timeline" id="timeline" min="0" max="0" value="0" step="0.1">
+    <div class="timeline-wrap">
+      <div class="scrub-bubble mono" id="bubble" hidden>--:--:--</div>
+      <input type="range" class="timeline" id="timeline" min="0" max="0" value="0" step="1">
+      <div class="timeline-ends"><span id="t-start">--:--</span><span id="t-end">--:--</span></div>
+    </div>
     <div class="scrub-clock mono" id="clock">--:--:--</div>
   </div>
 </div>
@@ -298,7 +321,8 @@
 const $ = (s) => document.querySelector(s);
 const stage = $("#stage"), wall = $("#wall");
 const playLayer = $("#play-layer"), vpEmpty = $("#stage-empty");
-const timeline = $("#timeline"), clock = $("#clock");
+const timeline = $("#timeline"), clock = $("#clock"), bubble = $("#bubble");
+const tStart = $("#t-start"), tEnd = $("#t-end");
 const daySelect = $("#day-select"), speedSelect = $("#speed-select");
 const liveBtn = $("#live-btn"), liveBtnLabel = $("#live-btn-label");
 const playBtn = $("#play-btn"), back10Btn = $("#back10-btn"), fwd10Btn = $("#fwd10-btn");
@@ -347,11 +371,18 @@ function wallToVideo(breaks, w) {
   }
   return best;
 }
+// The earliest and latest moment the day covers. Taken over every break
+// rather than just the first and last: breaks arrive in file order, and a
+// recorder session that spans midnight can hand us one that is out of order,
+// which used to leave the slider with min > max -- a range input given that
+// silently refuses to move.
 function dayStartWall(day) {
-  return day.breaks.length ? day.breaks[0].wall : 0;
+  return day.breaks.length ? Math.min(...day.breaks.map((b) => b.wall)) : 0;
 }
 function dayEndWall(day) {
-  const last = day.breaks[day.breaks.length - 1];
+  const last = day.breaks.reduce(
+    (a, b) => (b.wall + (b.dur ?? 0) > a.wall + (a.dur ?? 0) ? b : a),
+    day.breaks[0]);
   if (!last) return 0;
   // a day consolidated before aidot-webrtc wrote timeline sidecars: how long
   // it runs is only known once the browser has the file's metadata, so span
@@ -508,7 +539,7 @@ function startLiveClock() {
     if (activeDay && activeDay.live && !dragging) timeline.max = now;
     if (atLiveEdge) {
       clock.textContent = fmtHMS(now);
-      if (!dragging) timeline.value = now;
+      if (!dragging) pinToLiveEdge();
     }
   };
   tick();
@@ -596,9 +627,38 @@ $("#fs-btn").onclick = () => {
 // mean a minute of real time: positions are resolved against the recording
 // only at the moment we seek, so a gap in the footage costs a minute of
 // dragging rather than silently shifting everything after it.
+function fmtHM(sec) { return fmtHMS(sec).slice(0, 5); }
+
+// Place the bubble over the thumb. A range input gives no thumb position, so
+// derive it: the track is inset by half a thumb at each end, which is exactly
+// how the browser lays the thumb out.
+const THUMB = 22;
+function placeBubble(wall) {
+  const lo = Number(timeline.min), hi = Number(timeline.max);
+  const frac = hi > lo ? (wall - lo) / (hi - lo) : 1;
+  const usable = timeline.clientWidth - THUMB;
+  bubble.style.left = `${THUMB / 2 + frac * usable}px`;
+  bubble.textContent = fmtHMS(wall);
+}
+function showBubble(wall) { bubble.hidden = false; placeBubble(wall); }
+function hideBubble() { bubble.hidden = true; }
+
 function setTimelineRange(day) {
-  timeline.min = dayStartWall(day);
-  timeline.max = day.live ? nowWall() : dayEndWall(day);
+  const lo = dayStartWall(day);
+  const hi = day.live ? nowWall() : dayEndWall(day);
+  // never hand the input an empty or inverted range: it would stop responding
+  // altogether, which looks exactly like a frozen slider
+  timeline.min = Math.min(lo, hi - 1);
+  timeline.max = Math.max(hi, lo + 1);
+  tStart.textContent = fmtHM(Number(timeline.min));
+  tEnd.textContent = day.live ? "ahora" : fmtHM(Number(timeline.max));
+}
+
+// At the live edge the thumb belongs hard right, always: the range is
+// start-of-day..now and now is the right-hand end by definition. Re-asserted
+// on every tick rather than set once, because `max` moves every second.
+function pinToLiveEdge() {
+  timeline.value = timeline.max;
 }
 
 // ---------------- live edge (real mediamtx stream) ----------------
@@ -614,7 +674,8 @@ function enterLiveEdge(day) {
   showLive(currentCam);
 
   setTimelineRange(day);
-  timeline.value = timeline.max;
+  pinToLiveEdge();
+  hideBubble();
   updatePlayIcon();
   startLiveClock();
 }
@@ -759,18 +820,34 @@ timeline.addEventListener("input", () => {
   dragging = true;
   const wall = Number(timeline.value);
   clock.textContent = fmtHMS(wall);
+  showBubble(wall);
   if (atLiveEdge && wall < Number(timeline.max) - 2) {
     enterPlayback(activeDay, wall);
     dragging = true;  // enterPlayback repoints the slider; stay in the drag
+    showBubble(Number(timeline.value));
   }
 });
-timeline.addEventListener("change", () => {
+
+function endDrag() {
+  if (!dragging) return;
   const wall = Number(timeline.value);
   dragging = false;
+  hideBubble();
   if (!activeDay) return;
   if (activeDay.live && wall >= nowWall() - 5) enterLiveEdge(activeDay);
   else seekWall(wall);
-});
+}
+timeline.addEventListener("change", endDrag);
+// `change` is the only event that clears `dragging`, and it does not always
+// arrive -- a touch that ends outside the control, or a drag interrupted by
+// the tab being hidden, leaves it set. While it is set the clock stops moving
+// the thumb, so the slider looks frozen at the live edge. These are the
+// belt-and-braces releases.
+for (const ev of ["pointerup", "pointercancel", "touchend", "touchcancel", "blur"]) {
+  timeline.addEventListener(ev, endDrag);
+}
+window.addEventListener("pointerup", endDrag);
+addEventListener("resize", () => { if (dragging) placeBubble(Number(timeline.value)); });
 
 // ---------------- per-camera bootstrap ----------------
 // Adopting a fresh listing must not disturb what is playing: same day, more
