@@ -71,11 +71,11 @@
   .tabs button[data-tab="dashboard"] { text-transform: none; letter-spacing: .03em; }
 
   /* ---------- the stage ----------
-     There is exactly one live iframe per camera, and it stays put: moving an
-     iframe in the DOM reloads it, which means a fresh WebRTC negotiation and
-     a second or three of black. So the wall is never rebuilt between the
-     dashboard and a single camera -- the same tiles are re-laid-out by these
-     two modes, and the picture you were already watching just gets bigger. */
+     There is exactly one live <video> per camera, and it stays put: tearing it
+     down means a fresh WHEP negotiation -- offer, ICE, wait for a keyframe --
+     which is a second or three of black. So the wall is never rebuilt between
+     the dashboard and a single camera; the same tiles are re-laid-out by
+     these two modes, and the picture you were already watching gets bigger. */
   #stage { position: relative; background: #000; }
   body.mode-wall #stage { flex: 1 1 auto; min-height: 0; }
   body.mode-solo #stage {
@@ -101,7 +101,14 @@
   body.mode-solo .tile .label { display: none; }  /* the tab already says which */
 
   .tile { background: #000; overflow: hidden; cursor: pointer; position: relative; min-height: 0; }
-  .tile iframe { width: 100%; height: 100%; border: 0; pointer-events: none; display: block; }
+  .tile video { width: 100%; height: 100%; border: 0; display: block; object-fit: cover; }
+  body.mode-solo .tile video { object-fit: contain; }
+  /* a camera that is down should read as down, not as a black rectangle */
+  .tile.offline::after {
+    content: "sin señal"; position: absolute; inset: 0; display: flex;
+    align-items: center; justify-content: center;
+    color: var(--faint); font-size: 13px; letter-spacing: .05em;
+  }
   .tile .label {
     position: absolute; left: 16px; top: 14px; padding: 6px 14px;
     background: rgba(10,12,16,.6); border: 1px solid rgba(255,255,255,.08);
@@ -166,6 +173,8 @@
   }
   .transport button.primary svg { width: 19px; height: 19px; }
   .transport button:hover:not(:disabled), .icon-btn:hover { border-color: var(--accent); }
+  .icon-btn:disabled { opacity: .35; cursor: default; }
+  .icon-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .transport button.primary:hover:not(:disabled) { filter: brightness(1.12); }
   .transport button:disabled { opacity: .3; cursor: default; }
 
@@ -253,7 +262,7 @@
     width: 100vw; height: 100vh; max-width: none; aspect-ratio: auto;
     margin: 0; border: 0; border-radius: 0;
   }
-  #stage:fullscreen video, #stage:fullscreen iframe { object-fit: contain; }
+  #stage:fullscreen video { object-fit: contain; }
 </style>
 </head>
 <body class="mode-wall">
@@ -306,6 +315,7 @@
           <option value="16">16×</option>
         </select>
         <select id="day-select"></select>
+        <button id="sound-btn" class="icon-btn" title="Activar sonido" aria-label="Activar sonido"></button>
         <button id="fs-btn" class="icon-btn" title="Pantalla completa" aria-label="Pantalla completa">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                stroke-linecap="round" stroke-linejoin="round">
@@ -331,12 +341,19 @@ const timeline = $("#timeline"), clock = $("#clock"), bubble = $("#bubble");
 const tStart = $("#t-start"), tEnd = $("#t-end");
 const daySelect = $("#day-select"), speedSelect = $("#speed-select");
 const liveBtn = $("#live-btn"), liveBtnLabel = $("#live-btn-label");
+const soundBtn = $("#sound-btn");
 const playBtn = $("#play-btn"), back10Btn = $("#back10-btn"), fwd10Btn = $("#fwd10-btn");
 let cameras = [], mediamtxUrl = "", currentCam = null;
 let allDays = [], activeDay = null, atLiveEdge = false;
 let video = null, dragging = false, liveClockTimer = null;
 let curSeg = -1, pendingSeek = null, lastEnded = { seg: -1, at: -1 };
 const daysCache = {};   // per camera, so reopening a tab draws immediately
+const livePcs = {}, retryTimers = {};
+// per-camera sound preference. Muted unless the viewer has said otherwise --
+// and even then the browser only lets it through after a gesture, which the
+// sound button itself provides.
+let muted = {};
+try { muted = JSON.parse(localStorage.getItem("vigilante.muted") || "{}"); } catch {}
 
 function fmtDate(yyyymmdd) {
   return `${yyyymmdd.slice(6, 8)}/${yyyymmdd.slice(4, 6)}/${yyyymmdd.slice(0, 4)}`;
@@ -425,16 +442,16 @@ function nowWall() {
   return g("hour") * 3600 + g("minute") * 60 + g("second");
 }
 // ---------------- the wall ----------------
-// One iframe per camera, living in its tile. The dashboard and a single
+// One live <video> per camera, living in its tile. The dashboard and a single
 // camera are the same tiles under different CSS, so opening a camera does not
-// touch the iframe at all -- the stream you were already watching just fills
-// the stage. (Rebuilding it, or merely moving it in the DOM, would restart
-// the WHEP negotiation: offer, ICE, wait for a keyframe. That is the black
-// second or two.) What does drop a stream is scheduleRelease(), once you have
-// clearly settled somewhere else.
+// touch the stream you were already watching -- it just fills the stage.
+// Rebuilding it would restart the WHEP negotiation: offer, ICE, wait for a
+// keyframe, which is the black second or two. What does drop a stream is
+// scheduleRelease(), once you have clearly settled somewhere else.
 function showLive(cam) {
   for (const tile of wall.children) tile.classList.toggle("active", tile.dataset.cam === cam);
   fillWall();
+  applyMute(cam);
   vpEmpty.hidden = !!mediamtxUrl;
   if (!mediamtxUrl) vpEmpty.textContent = "Vista en vivo no configurada";
   playLayer.hidden = true;
@@ -444,6 +461,13 @@ function showLive(cam) {
 function showPlayback() {
   playLayer.hidden = false;
   vpEmpty.hidden = true;
+  // the live tile is still connected underneath; it must not keep talking
+  // over the recording
+  for (const tile of wall.children) {
+    const v = tile.querySelector("video");
+    if (v) v.muted = true;
+  }
+  updateSoundBtn();
 }
 
 // ---------------- tabs ----------------
@@ -473,8 +497,14 @@ function showTab(tab) {
     playLayer.hidden = true;
     vpEmpty.hidden = true;
     if (video) video.pause();
-    for (const tile of wall.children) tile.classList.remove("active");
+    for (const tile of wall.children) {
+      tile.classList.remove("active");
+      // the wall is many cameras at once; none of them gets to talk
+      const v = tile.querySelector("video");
+      if (v) v.muted = true;
+    }
     fillWall();
+    updateSoundBtn();
   } else {
     document.body.className = "mode-solo";
     $("#single").hidden = false;
@@ -493,9 +523,7 @@ function scheduleRelease() {
   if (!currentCam) return;   // the wall needs all of them
   idleTimer = setTimeout(() => {
     for (const tile of wall.children) {
-      if (tile.dataset.cam === currentCam) continue;
-      const f = tile.querySelector("iframe");
-      if (f) f.remove();
+      if (tile.dataset.cam !== currentCam) dropTile(tile);
     }
   }, IDLE_RELEASE_MS);
 }
@@ -521,20 +549,176 @@ function buildWall() {
 }
 
 // tiles are built once; their streams come and go with scheduleRelease()
+// Our own WHEP client rather than mediamtx's player page in an iframe. The
+// iframe worked, but it is a different origin, so its <video> was out of
+// reach -- and muting is a property of the element, which is why there was no
+// way to offer sound. Owning the element also means owning fullscreen and the
+// reconnect policy.
+//
+// Non-trickle: gather the candidates first, then POST the offer once. mediamtx
+// answers with the full description, so there is nothing to trickle back, and
+// it avoids having to keep the PATCH resource alive.
+async function whepConnect(cam, videoEl) {
+  const pc = new RTCPeerConnection({ iceServers: [] });
+  pc.addTransceiver("video", { direction: "recvonly" });
+  pc.addTransceiver("audio", { direction: "recvonly" });
+
+  const stream = new MediaStream();
+  pc.ontrack = (ev) => {
+    stream.addTrack(ev.track);
+    videoEl.srcObject = stream;
+    videoEl.play().catch(() => {});
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await new Promise((done) => {
+    if (pc.iceGatheringState === "complete") return done();
+    // don't let one unreachable STUN server hold the picture hostage
+    const t = setTimeout(done, 3000);
+    pc.addEventListener("icegatheringstatechange", () => {
+      if (pc.iceGatheringState === "complete") { clearTimeout(t); done(); }
+    });
+  });
+
+  const res = await fetch(`${mediamtxUrl}/${cam}/whep`, {
+    method: "POST",
+    headers: { "Content-Type": "application/sdp" },
+    body: pc.localDescription.sdp,
+  });
+  if (!res.ok) throw new Error(`whep ${res.status}`);
+  await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+  return pc;
+}
+
+function tileVideo(tile) {
+  let v = tile.querySelector("video");
+  if (!v) {
+    v = document.createElement("video");
+    v.playsInline = true;
+    v.autoplay = true;
+    // Muted is not a default we chose: a browser refuses to autoplay audio
+    // without a gesture, and a wall of cameras that all start talking would
+    // be the wrong behaviour anyway. The sound button opts one in.
+    v.muted = true;
+    tile.prepend(v);
+  }
+  return v;
+}
+
+// Reconnects on its own: the publisher goes away whenever the camera does,
+// and mediamtx answers 404 until it is back. Backs off to 5s so a camera that
+// is down overnight isn't hammered.
+function connectTile(tile) {
+  const cam = tile.dataset.cam;
+  if (tile.dataset.connecting === "1") return;
+  tile.dataset.connecting = "1";
+  const v = tileVideo(tile);
+
+  whepConnect(cam, v).then((pc) => {
+    tile.dataset.connecting = "";
+    // the tile may have been released while this was in flight
+    if (!wantsLive(cam) || !v.isConnected) { try { pc.close(); } catch {} return; }
+    livePcs[cam] = pc;
+    tile.classList.remove("offline");
+    pc.addEventListener("connectionstatechange", () => {
+      // "disconnected" is usually a blip that ICE recovers from on its own;
+      // only a terminal state is worth tearing down and redialling for
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        dropTile(tile);
+        if (wantsLive(cam)) retryTile(tile);
+      }
+    });
+    applyMute(cam);
+  }).catch(() => {
+    tile.dataset.connecting = "";
+    tile.classList.add("offline");
+    if (wantsLive(cam)) retryTile(tile);
+  });
+}
+
+function retryTile(tile) {
+  clearTimeout(retryTimers[tile.dataset.cam]);
+  retryTimers[tile.dataset.cam] = setTimeout(() => {
+    if (wantsLive(tile.dataset.cam)) connectTile(tile);
+  }, 5000);
+}
+
+function wantsLive(cam) {
+  return !!mediamtxUrl && (!currentCam || currentCam === cam);
+}
+
+function dropTile(tile) {
+  const cam = tile.dataset.cam;
+  clearTimeout(retryTimers[cam]);
+  const pc = livePcs[cam];
+  if (pc) { try { pc.close(); } catch {} delete livePcs[cam]; }
+  const v = tile.querySelector("video");
+  if (v) { v.srcObject = null; v.remove(); }
+  tile.dataset.connecting = "";
+}
+
 function fillWall() {
   if (!mediamtxUrl) return;
   for (const tile of wall.children) {
-    if (currentCam && tile.dataset.cam !== currentCam) continue;
-    if (tile.querySelector("iframe")) continue;
-    const f = document.createElement("iframe");
-    f.src = liveSrc(tile.dataset.cam);
-    f.allow = "autoplay; fullscreen";
-    f.setAttribute("allowfullscreen", "");
-    tile.prepend(f);
+    if (!wantsLive(tile.dataset.cam)) continue;
+    if (livePcs[tile.dataset.cam] || tile.dataset.connecting === "1") continue;
+    connectTile(tile);
   }
 }
 
-// ---------------- clock (runs all day today, live or rewound) ----------------
+// ---------------- sound ----------------
+// Only the camera being watched on its own can be unmuted, and only live:
+// recordings are video-only, and a wall of cameras all unmuted at once is
+// nobody's idea of useful.
+function soundOn() {
+  return currentCam && muted[currentCam] === false;
+}
+
+function applyMute(cam) {
+  const tile = [...wall.children].find((t) => t.dataset.cam === cam);
+  const v = tile && tile.querySelector("video");
+  if (v) {
+    const on = cam === currentCam && muted[cam] === false && atLiveEdge;
+    v.muted = !on;
+    // the browser can still refuse; if it does, say so in the button rather
+    // than leave it claiming sound is on
+    if (on) v.play().catch(() => { v.muted = true; updateSoundBtn(); });
+  }
+  updateSoundBtn();
+}
+
+const ICON_SOUND_ON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"'
+  + ' stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M4 9.5v5h3.2L12 18.6V5.4L7.2 9.5H4z" fill="currentColor"/>'
+  + '<path d="M15.6 8.8a4.2 4.2 0 0 1 0 6.4M18.2 6.2a7.8 7.8 0 0 1 0 11.6"/></svg>';
+const ICON_SOUND_OFF =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"'
+  + ' stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M4 9.5v5h3.2L12 18.6V5.4L7.2 9.5H4z" fill="currentColor"/>'
+  + '<path d="M16 10l4 4M20 10l-4 4"/></svg>';
+
+function updateSoundBtn() {
+  const live = !!currentCam && atLiveEdge && !!mediamtxUrl;
+  soundBtn.hidden = !mediamtxUrl;
+  soundBtn.disabled = !live;
+  const on = live && soundOn();
+  soundBtn.innerHTML = on ? ICON_SOUND_ON : ICON_SOUND_OFF;
+  soundBtn.classList.toggle("on", on);
+  soundBtn.title = on ? "Silenciar" : "Activar sonido";
+}
+
+soundBtn.onclick = () => {
+  if (!currentCam) return;
+  // absent means muted, so "is it muted" is `!== false` -- not `=== true`,
+  // which would read the untouched default as unmuted and need two clicks
+  muted[currentCam] = muted[currentCam] === false;
+  try { localStorage.setItem("vigilante.muted", JSON.stringify(muted)); } catch {}
+  applyMute(currentCam);
+};
+
+// ---------------- clock// ---------------- clock (runs all day today, live or rewound) ----------------
 // The right edge of the slider is *now*, even while watching something older,
 // so dragging right always leads back to live and dragging left always means
 // going back that much real time.
@@ -624,6 +808,13 @@ speedSelect.addEventListener("change", applyRate);
 // so fullscreening it covers both. iOS Safari won't do that for arbitrary
 // elements though -- there, only a <video> can go fullscreen, via its own
 // webkit call.
+// iOS only fullscreens a <video>, so it needs whichever one is on screen
+function fullscreenTarget() {
+  if (!atLiveEdge) return video;
+  const tile = [...wall.children].find((t) => t.dataset.cam === currentCam);
+  return tile && tile.querySelector("video");
+}
+
 $("#fs-btn").onclick = () => {
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     (document.exitFullscreen || document.webkitExitFullscreen).call(document);
@@ -632,10 +823,12 @@ $("#fs-btn").onclick = () => {
   const req = stage.requestFullscreen || stage.webkitRequestFullscreen;
   if (req) {
     req.call(stage).catch(() => {
-      if (video && video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+      const el = fullscreenTarget();
+      if (el && el.webkitEnterFullscreen) el.webkitEnterFullscreen();
     });
-  } else if (video && video.webkitEnterFullscreen) {
-    video.webkitEnterFullscreen();   // iPhone
+  } else {
+    const el = fullscreenTarget();
+    if (el && el.webkitEnterFullscreen) el.webkitEnterFullscreen();   // iPhone
   }
 };
 
@@ -925,6 +1118,7 @@ async function init() {
   mediamtxUrl = cfg.mediamtx_url;
   buildTabs();
   buildWall();
+  updateSoundBtn();
   showTab("dashboard");
   // warm both caches -- ours and the server's segment-duration memo -- while
   // the dashboard is what's on screen, so the first camera tab opens cold
