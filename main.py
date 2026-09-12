@@ -274,7 +274,8 @@ def days(cam: str):
                 "segments": [
                     {"url": f"/media/rec/{cam}/{name}",
                      "wall": b["wall"], "dur": b["dur"]}
-                    for name, b in zip(names, breaks)
+                    # same length by construction: _build_breaks walks names
+                    for name, b in zip(names, breaks, strict=True)
                 ],
             })
 
