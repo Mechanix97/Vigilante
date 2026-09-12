@@ -90,9 +90,16 @@
     height: 100%; display: grid; grid-template-columns: 1fr;
     grid-auto-rows: 1fr; gap: 2px; background: var(--border);
   }
+  /* On the wall the tiles carry the camera's own shape and the grid centres
+     them. Letting the rows stretch to fill the window instead left a 16:9
+     picture floating in a tall box with a band of black above and below --
+     and cropping it to fit (object-fit: cover) threw away the edges of the
+     frame, which on a security camera is the part you care about. */
+  body.mode-wall .wall { grid-auto-rows: auto; align-content: center; }
+  body.mode-wall .tile { aspect-ratio: 16/9; }
   @media (min-width: 700px) {
-    body.mode-wall .wall.n2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
-    body.mode-wall .wall.n3, body.mode-wall .wall.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+    body.mode-wall .wall.n2 { grid-template-columns: 1fr 1fr; }
+    body.mode-wall .wall.n3, body.mode-wall .wall.n4 { grid-template-columns: 1fr 1fr; }
   }
   body.mode-solo .wall { grid-template-columns: 1fr; gap: 0; }
   body.mode-solo .tile:not(.active) { display: none; }
@@ -101,8 +108,10 @@
   body.mode-solo .tile .label { display: none; }  /* the tab already says which */
 
   .tile { background: #000; overflow: hidden; cursor: pointer; position: relative; min-height: 0; }
-  .tile video { width: 100%; height: 100%; border: 0; display: block; object-fit: cover; }
-  body.mode-solo .tile video { object-fit: contain; }
+  /* contain, never cover: a tile on the wall is whatever shape the grid makes
+     it, and cropping a security camera to fit is throwing away the parts of
+     the frame you put it there to watch */
+  .tile video { width: 100%; height: 100%; border: 0; display: block; object-fit: contain; }
   /* a camera that is down should read as down, not as a black rectangle */
   .tile.offline::after {
     content: "sin señal"; position: absolute; inset: 0; display: flex;
