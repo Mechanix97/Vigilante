@@ -1078,11 +1078,27 @@ function adoptDays(days) {
   if (match) activeDay = match;
 }
 
+// Give the listing a deadline. The server builds it in milliseconds now, but
+// this is the call the whole timeline hangs off -- showCamera awaits it before
+// it can draw the slider at all -- so a request that never comes back used to
+// mean a camera tab with live video and no way to rewind, indefinitely and
+// with nothing on screen to say why. Bounded, a bad call costs one poll cycle
+// instead of the session.
+const DAYS_TIMEOUT_MS = 20000;
+
 async function refreshDays(cam = currentCam) {
-  const { days } = await fetch(`/api/cameras/${cam}/days`).then((r) => r.json());
-  daysCache[cam] = days;
-  if (cam === currentCam) adoptDays(days);
-  return days;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), DAYS_TIMEOUT_MS);
+  try {
+    const r = await fetch(`/api/cameras/${cam}/days`, { signal: ctl.signal });
+    if (!r.ok) throw new Error(`days: HTTP ${r.status}`);
+    const { days } = await r.json();
+    daysCache[cam] = days;
+    if (cam === currentCam) adoptDays(days);
+    return days;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 function openDays(days) {
@@ -1110,9 +1126,18 @@ async function showCamera(cam) {
     allDays = daysCache[cam];
     buildDaySelect();
     openDays(allDays);
-    refreshDays(cam);
+    refreshDays(cam).catch(() => {});
   } else {
-    const days = await refreshDays(cam);
+    let days;
+    try {
+      days = await refreshDays(cam);
+    } catch {
+      // no listing means no timeline, but the live picture is already up and
+      // the 45s poll will try again; leaving the transport dead is the honest
+      // state until one of those calls lands
+      if (cam === currentCam) openDays([]);
+      return;
+    }
     if (cam !== currentCam) return;   // tabbed away while we waited
     openDays(days);
   }
