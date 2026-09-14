@@ -14,9 +14,11 @@ services:
       # whatever hostname/IP mediamtx's :8889 is published on (Tailscale/LAN)
       - MEDIAMTX_URL=http://homelab:8889
     volumes:
-      # read-only: this app never writes into aidot-webrtc's output
-      - /mnt/hdd/aidot-daily:/daily:ro
-      - /mnt/hdd/aidot:/rec:ro
+      # read-only: this app never writes into aidot-webrtc's output.
+      # Same two paths aidot-webrtc records into -- on the ext4 disk, see the
+      # note in its compose file.
+      - /mnt/data/aidot-daily:/daily:ro
+      - /mnt/data/aidot:/rec:ro
       # the UI is a single static file: mounting it means a change needs a
       # browser refresh, not an image rebuild
       - ./static:/app/static:ro
