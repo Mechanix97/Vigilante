@@ -110,8 +110,19 @@ in front of it if that ever stops being true.
 * The segment currently being written has no duration in its header (it is
   muxed fragmented, `empty_moov`, precisely so it is playable before it is
   closed), so its length is taken as "from its start until now".
-* Segment durations are memoised on `(path, size)`: a finished segment is
-  probed once, the growing one is re-probed each time it changes.
+* Segment durations are not probed, they are subtracted. The recorder gives a
+  segment the epoch at which the previous one ended, so within a session the
+  gap between two consecutive epochs *is* the earlier segment's duration,
+  measured once at record time. Only the last segment of a session has nothing
+  after it, so only that one is probed — in practice one `ffprobe` per request,
+  on the file still being written, whatever the hour. Probing each segment
+  instead cost ~17 s by the end of the day (140 segments, ~1.4 GB read), which
+  is long enough that the browser never got its timeline.
+* What probing is left is memoised on `(path, size)` in a bounded LRU: a
+  finished segment is probed once, the growing one re-probed each time it
+  changes. The LRU matters — the growing segment mints a key per poll that is
+  never read again, and evicting the oldest keeps that churn from displacing
+  the entries that are actually reused.
 * No thumbnails on the day picker yet.
 * Motion detection is deliberately out of scope; the recording layout and this
   app's read-only API are meant to stay stable for a future companion that

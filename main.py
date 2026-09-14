@@ -26,6 +26,7 @@ track, per segment, where it lands in the concatenated video (`cum`) and where
 it lands on the wall clock (`wall`), and hand that breakpoint table to the
 frontend so it can map one to the other exactly.
 """
+import collections
 import json
 import os
 import re
@@ -48,8 +49,21 @@ DAY_RE = re.compile(r"^(\d{8})\.mp4$")
 SEG_RE = re.compile(r"^(\d{8})-(\d{6})\.mp4$")
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 CHUNK = 1024 * 1024
+# Sanity bound on a segment, used to reject nonsense when a duration is
+# derived by subtracting two epochs. aidot-webrtc cuts at SEGMENT_SECONDS
+# (600 here); an hour is far past anything it produces and far short of the
+# day-sized differences a stale index throws up.
+MAX_SEGMENT_SECONDS = 3600
 
-_dur_cache = {}   # (path, size) -> probed duration; see _probe_duration
+# (path, size) -> probed duration; see _probe_duration. An LRU rather than a
+# plain dict: the segment being written right now changes size on every poll,
+# so every poll mints a key that will never be looked up again. Evicting the
+# oldest keeps those from pushing out the finished segments' entries, which
+# are re-read on every request and so stay at the fresh end forever. The
+# previous `clear()`-at-a-threshold wiped those too, and the next request then
+# re-probed the entire day.
+_dur_cache = collections.OrderedDict()
+DUR_CACHE_MAX = 5000
 
 app = FastAPI(title="VIGILANTE")
 
@@ -88,6 +102,7 @@ def _probe_duration(path, cache=True):
         except OSError:
             return 0.0
         if key in _dur_cache:
+            _dur_cache.move_to_end(key)
             return _dur_cache[key]
     try:
         r = subprocess.run(
@@ -99,9 +114,10 @@ def _probe_duration(path, cache=True):
     except Exception:
         return 0.0
     if cache:
-        if len(_dur_cache) > 5000:
-            _dur_cache.clear()
         _dur_cache[key] = dur
+        _dur_cache.move_to_end(key)
+        while len(_dur_cache) > DUR_CACHE_MAX:
+            _dur_cache.popitem(last=False)
     return dur
 
 
@@ -126,8 +142,22 @@ def _build_breaks(camdir, segnames, durs):
     The filename stamp is only a fallback: ffmpeg writes it when the muxer
     opens the file, which lags the first frame by however long the encoder
     buffered (~12s here), so anchoring to it skews the whole timeline.
+
+    Those same epochs also give us the durations for free, which is what keeps
+    this cheap. The recorder assigns a segment's epoch as "where the previous
+    one ended" -- it probes the file it has just closed -- so within a session
+    the gap between two consecutive epochs *is* the earlier one's duration,
+    already measured, at record time, once. Only the last segment of each
+    session has nothing after it to subtract from, so only those are probed
+    here: ~20 files on the first call for a full day instead of ~140, and all
+    but the growing one are closed, so they are probed once and memoised for
+    good.
     """
     starts = {}
+    epochs = {}     # name -> its raw epoch, for the subtraction below
+    session = {}    # name -> which index claimed it, so we only subtract
+                    # within a session (across a gap the difference is the
+                    # outage, not a duration)
     try:
         indexes = sorted(f for f in os.listdir(camdir) if f.startswith(".session-"))
     except OSError:
@@ -144,6 +174,8 @@ def _build_breaks(camdir, segnames, durs):
             # elsewhere in the session cannot shift
             for name, epoch in sess["starts"].items():
                 starts[name] = (epoch + tz) % 86400
+                epochs[name] = epoch
+                session[name] = idx
             continue
         offset = 0.0
         for name in sess.get("segments", []):
@@ -151,6 +183,20 @@ def _build_breaks(camdir, segnames, durs):
             if name not in durs:
                 durs[name] = _probe_duration(os.path.join(camdir, name))
             offset += durs[name]
+
+    # duration of every segment that has a successor inside its own session
+    by_session = {}
+    for name, idx in session.items():
+        by_session.setdefault(idx, []).append(name)
+    for names in by_session.values():
+        names.sort(key=epochs.get)
+        for name, nxt in zip(names, names[1:], strict=False):
+            d = epochs[nxt] - epochs[name]
+            # a recorder-side probe that failed leaves two segments claiming
+            # the same start, and a stale index can put them a day apart --
+            # neither is a duration, so fall through to probing those
+            if name not in durs and 0 < d <= MAX_SEGMENT_SECONDS:
+                durs[name] = d
 
     breaks, cum = [], 0.0
     for name in segnames:
